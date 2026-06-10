@@ -131,7 +131,8 @@ gotcha in `reference/execution-model.md`.
 
 6. **Lint and dry-run.** Run `python3 scripts/lint_profile.py profile.yaml`
    (static checks: schema, dangling successors, missing Lua files, ≥2 successors
-   without Lua, self-attestation smells). Then build gralph and run the loop
+   without Lua, self-attestation smells). Then get the `gralph` binary (see
+   "Getting gralph" below) and run the loop
    against a fake agent with `--max-iterations` to confirm the graph traverses
    and routes as intended (see "Testing" below).
 
@@ -147,10 +148,32 @@ argument-shape mistakes (unknown/missing args).
 
 Full field-by-field schema: `reference/profile-yaml.md`.
 
+## Getting gralph
+
+If the `gralph` command is not available (`gralph version` fails), download a
+prebuilt binary from the latest GitHub release:
+
+```
+https://github.com/gralph-loop/gralph/releases/latest/download/gralph-<os>-<arch>
+```
+
+`<os>` is one of `linux` / `darwin` / `windows`, `<arch>` is `amd64` / `arm64`;
+Windows assets carry an `.exe` suffix (e.g. `gralph-windows-amd64.exe`). Each
+release also ships version-stamped copies (`gralph-v0.1.0-<os>-<arch>`) if you
+need to pin one. Example install:
+
+```
+curl -fL -o gralph https://github.com/gralph-loop/gralph/releases/latest/download/gralph-linux-amd64
+chmod +x gralph && mv gralph ~/.local/bin/   # any directory on PATH
+gralph version
+```
+
+Alternatively, build from source in the gralph repo (Go 1.22+):
+`go build -o gralph .`
+
 ## Testing a workflow
 
-gralph is a Go program; build it once (`go build -o gralph .` in the gralph
-repo, Go 1.22+), then from the profile's directory:
+With the `gralph` binary on PATH, run from the profile's directory:
 
 ```
 gralph run profile.yaml --max-iterations 12

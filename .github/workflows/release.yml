@@ -32,8 +32,12 @@ jobs:
       - name: Stamp version on asset names
         run: |
           cd dist
+          # 로컬 편의용 복사본은 릴리즈 자산에서 제외한다.
+          rm -f gralph gralph.exe
+          # 버전이 박힌 이름과, latest/download URL을 버전 무관하게 쓸 수 있는
+          # 버전 없는 별칭 이름을 둘 다 올린다.
           for f in gralph-*; do
-            mv "$f" "${f/gralph-/gralph-${GITHUB_REF_NAME}-}"
+            cp "$f" "${f/gralph-/gralph-${GITHUB_REF_NAME}-}"
           done
           ls -1 gralph-*
 
@@ -46,4 +50,4 @@ jobs:
 
             Verify a downloaded binary with `go version -m <file>` or `gralph version`.
           files: |
-            dist/gralph-v*
+            dist/gralph-*

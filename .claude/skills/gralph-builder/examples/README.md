@@ -11,12 +11,18 @@ run end-to-end and lint clean (`scripts/lint_profile.py`).
 
 ## Running either one
 
-gralph is a Go program (Go 1.22+). Build it once and put the binary on your
-`PATH` as `gralph` (the fake agent calls `gralph next`):
+Put a `gralph` binary on your `PATH` (the fake agent calls `gralph next`). If
+you don't have one, download it from the latest release
+(`gralph-<os>-<arch>`, `.exe` suffix on Windows) or build from source
+(Go 1.22+):
 
 ```sh
-# in the gralph repo:
+# download (adjust os/arch; see SKILL.md "Getting gralph"):
+curl -fL -o gralph https://github.com/gralph-loop/gralph/releases/latest/download/gralph-linux-amd64
+chmod +x gralph
+# or build, in the gralph repo:
 go build -o gralph .
+
 # then, e.g.:
 export PATH="$PWD:$PATH"
 
