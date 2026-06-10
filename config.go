@@ -66,8 +66,8 @@ type Profile struct {
 
 // DefaultPrompt is used when the profile does not define one.
 const DefaultPrompt = `You are running inside a gralph (ralph loop) session.
-1. Run ` + "`gralph next`" + ` to receive your current task and the exact gralph command to run when the task is done.
-2. Perform the task, then run the instructed gralph command with its arguments.
+1. Run ` + "`gralph next`" + ` to receive the gralph command you must eventually run, along with any context about it.
+2. Your job is to do whatever is necessary to be able to run that gralph command — figure out and carry out the work that running it requires. Once you've done that, run the instructed gralph command with its arguments.
 3. Whenever a gralph command's response tells you to end the session, end the session immediately.`
 
 // LoadProfile reads, defaults and validates a profile.
@@ -87,7 +87,7 @@ func LoadProfile(path string) (*Profile, error) {
 	p.Path = abs
 	p.Dir = filepath.Dir(abs)
 	if p.StateDir == "" {
-		p.StateDir = ".gralph"
+		p.StateDir = ".gralph-state"
 	}
 	if !filepath.IsAbs(p.StateDir) {
 		p.StateDir = filepath.Join(p.Dir, p.StateDir)

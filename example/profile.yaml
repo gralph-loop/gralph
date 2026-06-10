@@ -8,12 +8,12 @@ agent:
   command: ["bash", "test/agent.sh", "{{prompt}}"]
 
 prompt: |
-  You are in a gralph session.
-  1. Run `gralph next` to learn your current task.
-  2. Do the task, then run the instructed gralph command.
-  3. If a command response tells you to end the session, end it immediately.
+  You are running inside a gralph (ralph loop) session.
+  1. Run "gralph next" to receive the gralph command you must eventually run, along with any context about it.
+  2. Your job is to do whatever is necessary to be able to run that gralph command — figure out and carry out the work that running it requires. Once you've done that, run the instructed gralph command with its arguments.
+  3. Whenever a gralph command's response tells you to end the session, end the session immediately.
 
-state_dir: .gralph
+state_dir: .gralph-state
 fail_threshold: 5
 
 commands:
