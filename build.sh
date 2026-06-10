@@ -7,6 +7,13 @@ cd "$(dirname "$0")"
 
 PLATFORMS="linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64"
 
+# Version to stamp into the binary: $VERSION env var (set by CI from the git
+# tag) or the exact tag of the checked-out commit, if any.
+VERSION="${VERSION:-$(git describe --tags --exact-match 2>/dev/null || true)}"
+LDFLAGS=""
+[ -n "$VERSION" ] && LDFLAGS="-X main.version=$VERSION"
+echo "[build] version: ${VERSION:-(none)}"
+
 mkdir -p dist
 for p in $PLATFORMS; do
   os=${p%/*}
@@ -14,7 +21,7 @@ for p in $PLATFORMS; do
   out="dist/gralph-$os-$arch"
   [ "$os" = "windows" ] && out="$out.exe"
   echo "[build] $os/$arch"
-  GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -o "$out" .
+  GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
 done
 
 host_os=$(go env GOHOSTOS)

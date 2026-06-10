@@ -114,15 +114,26 @@ func profileFromSessionArgs(args []string) (*Profile, []string, error) {
 	return p, rest, nil
 }
 
-// versionString reports the module version stamped by the Go toolchain at
-// build time (Go 1.24+ derives it from the checked-out VCS tag), plus the
-// commit the binary was built from.
+// version is injected at build time via -ldflags "-X main.version=<tag>"
+// (see build.sh / build.ps1). Empty when built without it.
+var version string
+
+// versionString reports the injected version, falling back to the module
+// version stamped by the Go toolchain (Go 1.24+ derives it from the
+// checked-out VCS tag), plus the commit the binary was built from.
 func versionString() string {
+	v := version
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "gralph (no build info)"
+		if v == "" {
+			return "gralph (no build info)"
+		}
+		return "gralph " + v
 	}
-	out := "gralph " + info.Main.Version
+	if v == "" {
+		v = info.Main.Version
+	}
+	out := "gralph " + v
 	var rev, at string
 	dirty := false
 	for _, s := range info.Settings {

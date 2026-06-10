@@ -26,6 +26,8 @@ jobs:
 
       - name: Build all platforms
         run: bash build.sh
+        env:
+          VERSION: ${{ github.ref_name }}
 
       - name: Stamp version on asset names
         run: |
