@@ -1,0 +1,7 @@
+{
+  "attempts": 2,
+  "fixed": true,
+  "goal": "demo",
+  "report_path": "report.txt",
+  "summary": "all done nicely"
+}

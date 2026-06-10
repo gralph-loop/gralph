@@ -1,0 +1,68 @@
+# gralph example profile (Windows)
+# Same graph as profile.yaml; only the agent launch command differs.
+# Graph: plan -> implement -> verify -(route)-> { fix -> verify | finish }
+
+agent:
+  # Non-interactive agent launch command. {{prompt}} is replaced with the
+  # ralph prompt below. Here a scripted fake agent stands in for a real one
+  # (e.g. ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"]).
+  command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+            "-File", "test/agent.ps1", "{{prompt}}"]
+
+prompt: |
+  You are in a gralph session.
+  1. Run `gralph next` to learn your current task.
+  2. Do the task, then run the instructed gralph command.
+  3. If a command response tells you to end the session, end it immediately.
+
+state_dir: .gralph
+fail_threshold: 5
+
+commands:
+  - name: plan
+    guidance: |
+      Decide a one-word goal for this demo project and write it down.
+      RUN: gralph plan --goal <your-goal>
+    args:
+      - name: goal
+        required: true
+    lua: scripts/plan.lua
+    next: [implement]
+
+  - name: implement
+    guidance: |
+      Implement the goal "{{store "goal"}}". Produce a work report file.
+      RUN: gralph implement --report report.txt
+    args:
+      - name: report
+        required: true
+    lua: scripts/implement.lua
+    next: [verify]
+
+  - name: verify
+    guidance: |
+      Verify the implementation of "{{store "goal"}}" (attempt {{store "attempts"}}).
+      Submit your conclusion.
+      RUN: gralph verify --ok yes
+    args:
+      - name: ok
+        required: true
+    lua: scripts/verify.lua
+    next: [fix, finish]
+
+  - name: fix
+    guidance: |
+      Fix the problems found during verification of "{{store "goal"}}".
+      RUN: gralph fix
+    lua: scripts/fix.lua
+    next: [verify]
+
+  - name: finish
+    guidance: |
+      Write a closing summary for "{{store "goal"}}".
+      RUN: gralph finish --summary <one line>
+    args:
+      - name: summary
+        required: true
+    lua: scripts/finish.lua
+    # no `next` -> last command: success sets cursor := DONE
