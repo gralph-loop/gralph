@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 )
 
 const usage = `gralph - ralph loop orchestrator
@@ -14,6 +15,7 @@ Usage:
   gralph run <profile.yaml> [--max-iterations N]   run the ralph loop (orchestrator)
   gralph next [--profile <profile.yaml>]           (agent) get current task guidance
   gralph <command> [--profile p] [--arg value ...] (agent) run a YAML-defined custom command
+  gralph version                                   print version (from Go build info)
 
 Inside an agent session the profile path is taken from $GRALPH_PROFILE
 (set automatically by the orchestrator) unless --profile is given.
@@ -28,6 +30,9 @@ func main() {
 	switch os.Args[1] {
 	case "help", "-h", "--help":
 		fmt.Print(usage)
+
+	case "version", "--version":
+		fmt.Println(versionString())
 
 	case "run":
 		fs := flag.NewFlagSet("run", flag.ExitOnError)
@@ -107,6 +112,43 @@ func profileFromSessionArgs(args []string) (*Profile, []string, error) {
 		return nil, nil, err
 	}
 	return p, rest, nil
+}
+
+// versionString reports the module version stamped by the Go toolchain at
+// build time (Go 1.24+ derives it from the checked-out VCS tag), plus the
+// commit the binary was built from.
+func versionString() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "gralph (no build info)"
+	}
+	out := "gralph " + info.Main.Version
+	var rev, at string
+	dirty := false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.time":
+			at = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev != "" {
+		if len(rev) > 12 {
+			rev = rev[:12]
+		}
+		out += " (" + rev
+		if at != "" {
+			out += ", " + at
+		}
+		if dirty {
+			out += ", dirty"
+		}
+		out += ")"
+	}
+	return out
 }
 
 func fatal(err error) {

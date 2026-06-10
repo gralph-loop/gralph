@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: write
@@ -12,6 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 전체 히스토리와 태그를 받아야 (1) 태그 커밋이 main에 있는지 검사하고
+          # (2) Go 툴체인이 태그에서 모듈 버전을 스탬핑할 수 있다.
+          fetch-depth: 0
+
+      - name: Verify tag commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
       - uses: actions/setup-go@v5
         with:
@@ -20,12 +27,21 @@ jobs:
       - name: Build all platforms
         run: bash build.sh
 
+      - name: Stamp version on asset names
+        run: |
+          cd dist
+          for f in gralph-*; do
+            mv "$f" "${f/gralph-/gralph-${GITHUB_REF_NAME}-}"
+          done
+          ls -1 gralph-*
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: gralph build-${{ github.run_number }}
+          name: gralph ${{ github.ref_name }}
           body: |
             Automated build of ${{ github.sha }}.
+
+            Verify a downloaded binary with `go version -m <file>` or `gralph version`.
           files: |
-            dist/gralph-*
+            dist/gralph-v*
