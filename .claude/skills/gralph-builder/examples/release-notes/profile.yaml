@@ -1,0 +1,61 @@
+# Example: release-notes pipeline (structured-evidence gates)
+#
+# Graph:  gather -> draft -> verify_citations -> publish
+#
+# A non-coding workflow. The "quality" of release notes is subjective, so the
+# gates don't pretend to judge prose — they enforce checkable evidence: the
+# source has real PR refs, the draft cites them, and every cited PR actually
+# exists in the source (no fabricated citations).
+#
+# Build gralph, then from this directory:
+#   gralph run profile.yaml --max-iterations 10
+
+agent:
+  command: ["bash", "agent.sh", "{{prompt}}"]
+
+prompt: |
+  You are running inside a gralph (ralph loop) session.
+  1. Run "gralph next" to receive the gralph command you must eventually run.
+  2. Do whatever is needed to be able to run it, then run it with its arguments.
+  3. Whenever a command's response says to end the session, end it immediately.
+
+state_dir: .gralph-state
+fail_threshold: 4
+
+commands:
+  - name: gather
+    guidance: |
+      Collect the merged changes for this release into a source file, one per
+      line, each line referencing its PR like "#123 short description".
+      RUN: gralph gather --source changes.txt
+    args:
+      - { name: source, required: true, desc: "path to the collected changes" }
+    lua: scripts/gather.lua
+    next: [draft]
+
+  - name: draft
+    guidance: |
+      Write the release notes to a markdown file, citing PR numbers (#NNN) from
+      "{{store "source"}}". The source has {{store "pr_count"}} PRs to cover.
+      RUN: gralph draft --notes NOTES.md
+    args:
+      - { name: notes, required: true, desc: "path to the drafted notes" }
+    lua: scripts/draft.lua
+    next: [verify_citations]
+
+  - name: verify_citations
+    guidance: |
+      Submit your notes for citation verification. Every #NNN you cite must
+      exist in the source; the gate checks this mechanically.
+      RUN: gralph verify_citations
+    lua: scripts/verify_citations.lua
+    next: [publish]
+
+  - name: publish
+    guidance: |
+      Tag the published release (semver: vMAJOR.MINOR.PATCH).
+      RUN: gralph publish --version v2.3.0
+    args:
+      - { name: version, required: true }
+    lua: scripts/publish.lua
+    # terminal -> DONE
