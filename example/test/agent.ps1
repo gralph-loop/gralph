@@ -9,7 +9,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host "----- agent session start -----"
 
-$env:PATH = "$env:PATH;${PWD}\dist;"
+$env:PATH = "$env:PATH;$(Join-Path $PSScriptRoot '..\..\dist')"
 $guidance = & "gralph.exe" next 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { Write-Host "agent: next failed"; exit 1 }
 ($guidance -split "`r?`n") | Where-Object { $_ -ne "" } | ForEach-Object { Write-Host "  [next] $_" }

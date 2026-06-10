@@ -7,7 +7,7 @@
 #   4. obey "End the session" responses; otherwise fix & retry in-session
 set -u
 PROMPT="${1:-}"
-PATH="$PATH;$PWD/dist"
+PATH="$PATH:$(cd "$(dirname "$0")/../.." && pwd)/dist"
 
 echo "----- agent session start -----"
 guidance="$(gralph next)" || { echo "agent: next failed"; exit 1; }
