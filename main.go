@@ -15,10 +15,14 @@ import (
 const usage = `gralph - ralph loop orchestrator
 
 Usage:
-  gralph run <profile.yaml> [--max-iterations N]   run the ralph loop (orchestrator)
-  gralph next [--profile <profile.yaml>]           (agent) get current task guidance
-  gralph <command> [--profile p] [--arg value ...] (agent) run a YAML-defined custom command
-  gralph version                                   print version (from Go build info)
+  gralph run <profile.yaml> [--max-iterations N]    run the ralph loop (orchestrator)
+  gralph next [--profile <profile.yaml>]            (agent) get current task guidance
+  gralph <command> [--profile p] [--arg value ...]  (agent) run a YAML-defined custom command
+  gralph status [--profile p] [--json]              show cursor, session, failures, quota progress
+  gralph reset [--profile p] [--force] [--failures] reset the state dir (--failures: counters only)
+  gralph validate <profile.yaml>                    lint a profile without running anything
+  gralph try <command> [--profile p] [--arg v ...]  dry-run a gate: no cursor check, nothing committed
+  gralph version                                    print version (from Go build info)
 
 Inside an agent session the profile path is taken from $GRALPH_PROFILE
 (set automatically by the orchestrator) unless --profile is given.
@@ -67,6 +71,78 @@ func main() {
 			fatal(err)
 		}
 		fmt.Print(out)
+
+	case "status":
+		p, rest, err := profileFromSessionArgs(os.Args[2:])
+		if err != nil {
+			fatal(err)
+		}
+		asJSON := false
+		for _, a := range rest {
+			if a != "--json" {
+				fatal(fmt.Errorf("unknown flag %q for status", a))
+			}
+			asJSON = true
+		}
+		if err := printStatus(p, asJSON); err != nil {
+			fatal(err)
+		}
+
+	case "reset":
+		p, rest, err := profileFromSessionArgs(os.Args[2:])
+		if err != nil {
+			fatal(err)
+		}
+		force, failuresOnly := false, false
+		for _, a := range rest {
+			switch a {
+			case "--force":
+				force = true
+			case "--failures":
+				failuresOnly = true
+			default:
+				fatal(fmt.Errorf("unknown flag %q for reset", a))
+			}
+		}
+		what := "state.json, store.json and progress.json"
+		if failuresOnly {
+			what = "the failure counters"
+		}
+		if !force {
+			ok, err := confirmReset(fmt.Sprintf("Reset %s in %s?", what, p.StateDir))
+			if err != nil {
+				fatal(err)
+			}
+			if !ok {
+				fmt.Fprintln(os.Stderr, "gralph: reset aborted")
+				os.Exit(1)
+			}
+		}
+		if err := resetStateDir(p.StateDir, failuresOnly); err != nil {
+			fatal(err)
+		}
+		fmt.Printf("reset %s in %s\n", what, p.StateDir)
+
+	case "validate":
+		if len(os.Args) != 3 {
+			fatal(fmt.Errorf("usage: gralph validate <profile.yaml>"))
+		}
+		os.Exit(runValidate(os.Args[2]))
+
+	case "try":
+		if len(os.Args) < 3 || os.Args[2] == "" || os.Args[2][0] == '-' {
+			fatal(fmt.Errorf("usage: gralph try <command> [--profile p] [--arg value ...]"))
+		}
+		name := os.Args[2]
+		p, rest, err := profileFromSessionArgs(os.Args[3:])
+		if err != nil {
+			fatal(err)
+		}
+		code, err := runTry(p, name, rest, os.Stdout)
+		if err != nil {
+			fatal(err)
+		}
+		os.Exit(code)
 
 	default: // YAML-defined custom command
 		name := os.Args[1]
