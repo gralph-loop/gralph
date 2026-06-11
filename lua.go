@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	lua "github.com/yuin/gopher-lua"
 )
@@ -24,11 +26,20 @@ type LuaOutcome struct {
 // isSub marks a subcommand gate, where gralph.route is forbidden (routing
 // belongs to the parent: under parallel workers "the last subcommand" is
 // non-deterministic and must not pick the graph path).
-func runLua(script string, args map[string]string, store *Store, candidates []string, prog *Progress, isSub bool) LuaOutcome {
+//
+// A positive timeout aborts the script via the lua context; the abort is a
+// SCRIPT ERROR (it counts toward the failure threshold). Zero = no timeout.
+func runLua(script string, args map[string]string, store *Store, candidates []string, prog *Progress, isSub bool, timeout time.Duration) LuaOutcome {
 	out := LuaOutcome{}
 
 	L := lua.NewState()
 	defer L.Close()
+
+	if timeout > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		L.SetContext(ctx)
+	}
 
 	g := L.NewTable()
 

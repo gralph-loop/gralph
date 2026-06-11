@@ -3,10 +3,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
 )
 
 const usage = `gralph - ralph loop orchestrator
@@ -35,24 +38,19 @@ func main() {
 		fmt.Println(versionString())
 
 	case "run":
-		fs := flag.NewFlagSet("run", flag.ExitOnError)
-		maxIter := fs.Int("max-iterations", 0, "stop after N iterations (0 = unlimited)")
-		args := os.Args[2:]
-		// allow `gralph run profile.yaml --max-iterations N`
-		var profilePath string
-		if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
-			profilePath = args[0]
-			args = args[1:]
-		}
-		_ = fs.Parse(args)
-		if profilePath == "" {
-			fatal(fmt.Errorf("usage: gralph run <profile.yaml>"))
+		profilePath, maxIter, err := parseRunArgs(os.Args[2:])
+		if err != nil {
+			fatal(err)
 		}
 		p, err := LoadProfile(profilePath)
 		if err != nil {
 			fatal(err)
 		}
-		if err := runLoop(p, *maxIter); err != nil {
+		// SIGINT/SIGTERM cancel the context; the loop forwards the signal to
+		// the running agent, reports the preserved cursor and exits.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := runLoop(ctx, p, maxIter); err != nil {
 			fatal(err)
 		}
 
@@ -83,6 +81,34 @@ func main() {
 		fmt.Println(res.Message)
 		os.Exit(res.ExitCode)
 	}
+}
+
+// parseRunArgs parses the arguments of `gralph run`. The profile path may
+// come before or after the flags:
+//
+//	gralph run profile.yaml --max-iterations N
+//	gralph run --max-iterations N profile.yaml
+func parseRunArgs(args []string) (profilePath string, maxIterations int, err error) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	maxIter := fs.Int("max-iterations", 0, "stop after N iterations (0 = unlimited)")
+	// path-first form
+	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+		profilePath = args[0]
+		args = args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", 0, err
+	}
+	// flags-first form: recover the positional argument left over after
+	// flag parsing.
+	rest := fs.Args()
+	if profilePath == "" && len(rest) > 0 {
+		profilePath, rest = rest[0], rest[1:]
+	}
+	if profilePath == "" || len(rest) > 0 {
+		return "", 0, fmt.Errorf("usage: gralph run <profile.yaml> [--max-iterations N]")
+	}
+	return profilePath, *maxIter, nil
 }
 
 // profileFromSessionArgs extracts an optional leading/inline --profile flag,
