@@ -309,3 +309,131 @@ func TestAgentBackoff(t *testing.T) {
 		}
 	}
 }
+
+// buildGralph compiles the real gralph binary into a temp dir so scripted
+// agents can shell out to it exactly like a real session would.
+func buildGralph(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "gralph")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// TestLoopAgentOverride drives the real orchestrator (runLoop) against two
+// scripted agents: the first node uses the profile-level agent/prompt, the
+// second node overrides both. Each agent writes the prompt it received into
+// its own marker file, so the test proves (a) the cursor node's override
+// command is the one launched and (b) {{prompt}} is substituted with the
+// node-level prompt (falling back to the global one).
+func TestLoopAgentOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("e2e agent script needs bash")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+
+	bin := buildGralph(t)
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("profile.yaml", `agent:
+  command: ["bash", "agent-global.sh", "{{prompt}}"]
+prompt: GLOBAL PROMPT
+commands:
+  - name: implement
+    guidance: |
+      RUN: gralph implement
+    next: [verify]
+  - name: verify
+    guidance: |
+      RUN: gralph verify
+    agent:
+      command: ["bash", "agent-verify.sh", "{{prompt}}"]
+    prompt: VERIFY PROMPT
+`)
+	// One invocation = one session. Each fake agent records the prompt it was
+	// launched with, then runs the command its node instructs. If the loop
+	// launched the wrong agent for the cursor, the command would be rejected
+	// and the cursor would never reach DONE.
+	write("agent-global.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -u
+GRALPH=%q
+printf '%%s' "$1" > global-prompt.txt
+"$GRALPH" next >/dev/null
+"$GRALPH" implement >/dev/null
+exit 0
+`, bin))
+	write("agent-verify.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -u
+GRALPH=%q
+printf '%%s' "$1" > verify-prompt.txt
+"$GRALPH" next >/dev/null
+"$GRALPH" verify >/dev/null
+exit 0
+`, bin))
+
+	p, err := LoadProfile(filepath.Join(dir, "profile.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runLoop(context.Background(), p, 4); err != nil {
+		t.Fatalf("runLoop: %v", err)
+	}
+
+	st, err := LoadState(p.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Cursor != DoneCursor {
+		t.Fatalf("cursor = %q, want DONE", st.Cursor)
+	}
+	for marker, want := range map[string]string{
+		"global-prompt.txt": "GLOBAL PROMPT",
+		"verify-prompt.txt": "VERIFY PROMPT",
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, marker))
+		if err != nil {
+			t.Fatalf("agent marker %s missing: %v", marker, err)
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", marker, got, want)
+		}
+	}
+}
+
+// TestAgentOverrideValidation: a node-level agent override with an empty
+// command must be rejected at profile load time.
+func TestAgentOverrideValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(path, []byte(`agent:
+  command: ["true"]
+commands:
+  - name: only
+    guidance: g
+    agent:
+      command: []
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadProfile(path)
+	if err == nil {
+		t.Fatal("expected validation error for empty agent override command")
+	}
+	if !strings.Contains(err.Error(), "agent override") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

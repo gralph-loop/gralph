@@ -72,6 +72,12 @@ type CommandSpec struct {
 	LuaTimeout string `yaml:"lua_timeout"`
 	// luaTimeout is LuaTimeout parsed at load time (not from YAML).
 	luaTimeout time.Duration
+	// Agent optionally overrides the profile-level agent for sessions whose
+	// cursor is this node (e.g. a cheaper model for verification steps).
+	Agent *AgentSpec `yaml:"agent"`
+	// Prompt optionally overrides the profile-level ralph prompt for
+	// sessions whose cursor is this node.
+	Prompt string `yaml:"prompt"`
 	// Subcommands turn this node into a fork/join: every subcommand quota
 	// must be met before this command itself may run (as the finalize gate).
 	Subcommands []SubcommandSpec `yaml:"subcommands"`
@@ -265,6 +271,9 @@ func (p *Profile) validate() error {
 		if len(c.Next) > 1 && c.Lua == "" {
 			return fmt.Errorf("profile: command %q has multiple successors but no lua to route them", c.Name)
 		}
+		if c.Agent != nil && len(c.Agent.Command) == 0 {
+			return fmt.Errorf("profile: command %q declares an agent override with an empty command", c.Name)
+		}
 	}
 	return nil
 }
@@ -320,6 +329,24 @@ func (p *Profile) LuaTimeoutFor(c *CommandSpec) time.Duration {
 		return c.luaTimeout
 	}
 	return p.luaTimeout
+}
+
+// AgentCommandFor resolves the effective agent command for a node: the
+// node's override when present, otherwise the profile-level command.
+func (p *Profile) AgentCommandFor(c *CommandSpec) []string {
+	if c != nil && c.Agent != nil && len(c.Agent.Command) > 0 {
+		return c.Agent.Command
+	}
+	return p.Agent.Command
+}
+
+// PromptFor resolves the effective ralph prompt for a node: the node's
+// override when present, otherwise the profile-level prompt.
+func (p *Profile) PromptFor(c *CommandSpec) string {
+	if c != nil && c.Prompt != "" {
+		return c.Prompt
+	}
+	return p.Prompt
 }
 
 // LuaPath resolves a command's lua script relative to the profile dir.
