@@ -134,7 +134,7 @@ func TestLintWarnsOnFlatGuidanceInvocation(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("errs = %v", errs)
 	}
-	if len(warns) != 1 || !strings.Contains(warns[0], "guidance invokes `gralph plan` (deprecated flat form); write `gralph do plan`") {
+	if len(warns) != 1 || !strings.Contains(warns[0], "guidance invokes `gralph plan`, which does not dispatch; write `gralph do plan`") {
 		t.Fatalf("warns = %v", warns)
 	}
 }

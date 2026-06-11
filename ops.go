@@ -228,10 +228,10 @@ func lintProfile(path string) (errs, warns []string) {
 	return errs, warns
 }
 
-// flatInvocationWarnings flags hand-written guidance that still tells the
-// agent to run the deprecated flat form `gralph <name>` for a name defined in
-// the profile. The generated usage block already prints `gralph do <name>`,
-// so a flat invocation in the guidance would contradict it.
+// flatInvocationWarnings flags hand-written guidance that tells the agent to
+// run `gralph <name>` for a name defined in the profile. The flat form does
+// not dispatch (custom commands run as `gralph do <name>`), so such guidance
+// would send the agent into an unknown-command error.
 func flatInvocationWarnings(p *Profile) (warns []string) {
 	names := map[string]bool{}
 	for i := range p.Commands {
@@ -245,7 +245,7 @@ func flatInvocationWarnings(p *Profile) (warns []string) {
 		c := &p.Commands[i]
 		for _, n := range flatInvocations(c.Guidance, names) {
 			warns = append(warns, fmt.Sprintf(
-				"command %q: guidance invokes `gralph %s` (deprecated flat form); write `gralph do %s`",
+				"command %q: guidance invokes `gralph %s`, which does not dispatch; write `gralph do %s`",
 				c.Name, n, n))
 		}
 	}

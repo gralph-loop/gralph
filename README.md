@@ -222,9 +222,8 @@ gralph try <command|subcommand> [--profile p] [--arg value ...]  # 게이트 드
   분리되어 있다. 커맨드/서브커맨드 이름으로 쓸 수 없는 것은 `do`(네임스페이스 단어)와
   `DONE`(완료 센티널)뿐이며, 내장 단어(`run` `next` 등)는 이름으로 써도 된다 — 새 내장
   커맨드가 추가되어도 기존 프로파일은 깨지지 않는다.
-- 구형 평면 호출 `gralph <name>`은 전환기 동안 deprecation 경고(stderr)와 함께 동작하지만,
-  내장 커맨드가 우선하므로 새로 작성하는 안내문에는 쓰지 말 것. `validate`가 안내문 속
-  평면 호출을 경고로 잡아준다.
+- 평면 호출 `gralph <name>`은 지원하지 않는다 — `gralph do <name>`을 안내하는 에러로
+  거부된다. `validate`가 안내문 속 평면 호출을 경고로 잡아준다.
 
 ## 프로파일 YAML 레퍼런스
 

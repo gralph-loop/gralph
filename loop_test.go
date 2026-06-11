@@ -97,8 +97,7 @@ case "$guidance" in
     "$GRALPH" do build-all >/dev/null
     ;;
   *"Current task: wrap"*)
-    # deprecated flat form: must still dispatch during the transition period
-    "$GRALPH" wrap >/dev/null
+    "$GRALPH" do wrap >/dev/null
     ;;
 esac
 exit 0

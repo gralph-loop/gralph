@@ -180,13 +180,8 @@ func main() {
 		runDo(os.Args[2], os.Args[3:])
 
 	default:
-		// Legacy flat form `gralph <command>`. Deprecated: a custom command
-		// here can be shadowed by any built-in added later, so the canonical
-		// form is `gralph do <command>`. Kept for one transition period.
-		fmt.Fprintf(os.Stderr,
-			"gralph: warning: `gralph %s` is deprecated; use `gralph do %s`\n",
-			os.Args[1], os.Args[1])
-		runDo(os.Args[1], os.Args[2:])
+		fatal(fmt.Errorf("unknown command %q (custom commands run as `gralph do %s`)",
+			os.Args[1], os.Args[1]))
 	}
 }
 
