@@ -26,7 +26,11 @@ function (never via the CLI):
 
 The agent process is launched with its working directory set to the profile's
 directory. The agent never observes the loop's termination — from its side every
-session looks identical.
+session looks identical. Orchestrator robustness: an unlaunchable agent binary
+aborts the loop immediately; consecutive abnormal exits without cursor progress
+back off exponentially and abort after 5; `agent.timeout` (if set) kills an
+overlong session and retries it like any abnormal exit; SIGINT/SIGTERM shut the
+loop down cleanly with the cursor preserved.
 
 ## What the agent does in a session
 
@@ -54,7 +58,10 @@ When the agent runs `gralph <name> --args...`:
   The store is **not** committed. The response tells the agent to fix it and
   retry *in this session* — **except** on every n-th failure (see threshold),
   where the response also says "End the session now", forcing a fresh
-  session/context next iteration.
+  session/context next iteration. The reason is also persisted to
+  `failures.json` and shown by `gralph next` in later sessions (cleared when
+  the node succeeds) — so a fresh context still sees what already went wrong.
+  Write reasons accordingly.
 - **Success** — Lua neither failed nor errored (and, if the node has ≥2
   successors, called `gralph.route`). The cursor advances, the store is
   committed, and the response **always** tells the agent to end the session.
@@ -128,6 +135,13 @@ Under `state_dir` (default `.gralph-state`, resolved relative to the profile):
 - **`progress.json`** — framework-internal record of completed subcommand work
   items (key → timestamp/session). Separate from `state.json` because its
   lifecycle differs: survives session rotation, cleared only on parent success.
+- **`failures.json`** — framework-internal record of recent failure reasons per
+  node label (max 3 each). Unlike the failure *counters* it survives session
+  rotation; `gralph next` renders it so the next session doesn't repeat the
+  mistake. Cleared per label on success.
+- **`journal.jsonl`** — append-only event log (session starts, command
+  successes/failures with gate duration, recorded sub-items, loop completion).
+  Best-effort; read it for post-hoc analysis, never write it.
 - **`lock`** — flock file serializing concurrent `gralph` processes'
   state commits (parallel sub-agent workers).
 
@@ -145,6 +159,16 @@ gate never pollutes later steps. Practical implication:
 
 ## Reset / inspect
 
-To restart a workflow from scratch, delete the state dir
-(`rm -rf .gralph-state`). To inspect progress mid-run, read `state.json`
-(`cursor` tells you where it is) and `store.json` (accumulated evidence).
+Built-in ops subcommands cover the lifecycle:
+
+- `gralph status [--json]` — cursor, session id, per-node failure counts, and
+  quota progress for the cursor node.
+- `gralph reset [--force] [--failures]` — wipe the state dir (or only the
+  failure counters with `--failures`; useful because counters reset only when
+  the orchestrator rotates sessions, so manual runs accumulate them).
+- `gralph validate profile.yaml` — all loader checks plus lua existence/compile
+  and graph reachability warnings, without starting the loop.
+- `gralph try <cmd> [--arg v ...]` — dry-run one gate: cursor check skipped,
+  store writes shown but never committed, counters/progress untouched.
+- `gralph graph profile.yaml [--state]` — the command graph as mermaid,
+  optionally highlighting the current cursor.

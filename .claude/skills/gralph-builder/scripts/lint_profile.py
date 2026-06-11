@@ -27,6 +27,9 @@ except ImportError:
     sys.exit(2)
 
 RESERVED = "DONE"
+# Built-in CLI words: the dispatcher resolves these before YAML commands, so
+# the loader rejects them as command/subcommand names (shared CLI namespace).
+RESERVED_CLI = {"run", "next", "help", "version", "status", "reset", "validate", "try"}
 
 
 def main(argv):
@@ -98,6 +101,8 @@ def main(argv):
             continue
         if name == RESERVED:
             err(f'"{RESERVED}" is a reserved command name')
+        if name in RESERVED_CLI:
+            err(f'"{name}" is a built-in gralph subcommand and cannot be a command name')
         if name in by_name:
             err(f'duplicate command name "{name}"')
         by_name[name] = c
@@ -119,6 +124,8 @@ def main(argv):
                 continue
             if sn == RESERVED:
                 err(f'"{RESERVED}" is a reserved command name')
+            if sn in RESERVED_CLI:
+                err(f'"{sn}" is a built-in gralph subcommand and cannot be a subcommand name')
             if sn in by_name:
                 err(f'subcommand "{sn}" of "{name}" clashes with a command name')
             if sn in sub_names:
@@ -204,10 +211,6 @@ def main(argv):
                      f"will always succeed. Add a deterministic gate unless "
                      f"this node truly needs no check.")
 
-        guidance = c.get("guidance") or ""
-        if guidance and "RUN:" not in guidance:
-            warn(f'command "{name}": guidance has no "RUN:" line; the agent may '
-                 f"not know which command closes the node.")
 
         # self-attestation smell: a boolean/ack arg the gate likely just trusts
         for a in (c.get("args") or []):
