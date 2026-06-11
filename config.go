@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -65,6 +66,12 @@ type CommandSpec struct {
 	Next []string `yaml:"next"`
 	// FailThreshold overrides the profile-level threshold for this command.
 	FailThreshold int `yaml:"fail_threshold"`
+	// LuaTimeout is a Go duration string (e.g. "10s") limiting how long the
+	// command's lua script may run. Overrides the profile-level lua_timeout.
+	// Empty means "inherit"; no setting anywhere means no timeout.
+	LuaTimeout string `yaml:"lua_timeout"`
+	// luaTimeout is LuaTimeout parsed at load time (not from YAML).
+	luaTimeout time.Duration
 	// Subcommands turn this node into a fork/join: every subcommand quota
 	// must be met before this command itself may run (as the finalize gate).
 	Subcommands []SubcommandSpec `yaml:"subcommands"`
@@ -75,6 +82,14 @@ type AgentSpec struct {
 	// Command is argv; every element may contain the placeholder
 	// {{prompt}}, replaced with the ralph prompt.
 	Command []string `yaml:"command"`
+	// Timeout is a Go duration string (e.g. "30m") limiting one agent
+	// session. On expiry the process is killed and the iteration counts as
+	// an abnormal exit (the cursor is kept, so the work is retried).
+	// Empty means no timeout.
+	Timeout string `yaml:"timeout"`
+
+	// timeout is Timeout parsed at load time (not from YAML).
+	timeout time.Duration
 }
 
 // Profile is the user-supplied YAML profile.
@@ -84,11 +99,17 @@ type Profile struct {
 	StateDir      string        `yaml:"state_dir"`
 	FailThreshold int           `yaml:"fail_threshold"`
 	Commands      []CommandSpec `yaml:"commands"`
+	// LuaTimeout is the profile-level default lua script timeout
+	// (Go duration string); commands may override it with their own
+	// lua_timeout. Empty means no timeout.
+	LuaTimeout string `yaml:"lua_timeout"`
 
 	// Dir is the directory containing the profile file (not from YAML).
 	Dir string `yaml:"-"`
 	// Path is the absolute path of the profile file (not from YAML).
 	Path string `yaml:"-"`
+	// luaTimeout is LuaTimeout parsed at load time (not from YAML).
+	luaTimeout time.Duration
 }
 
 // DefaultPrompt is used when the profile does not define one.
@@ -125,10 +146,39 @@ func LoadProfile(path string) (*Profile, error) {
 	if p.Prompt == "" {
 		p.Prompt = DefaultPrompt
 	}
+	if p.Agent.timeout, err = parseTimeout("agent.timeout", p.Agent.Timeout); err != nil {
+		return nil, err
+	}
+	if p.luaTimeout, err = parseTimeout("lua_timeout", p.LuaTimeout); err != nil {
+		return nil, err
+	}
+	for i := range p.Commands {
+		c := &p.Commands[i]
+		field := fmt.Sprintf("command %q: lua_timeout", c.Name)
+		if c.luaTimeout, err = parseTimeout(field, c.LuaTimeout); err != nil {
+			return nil, err
+		}
+	}
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// parseTimeout parses an optional Go duration string from the profile.
+// Empty means "no timeout" (zero duration).
+func parseTimeout(field, s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("profile: %s: %w", field, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("profile: %s must be positive, got %q", field, s)
+	}
+	return d, nil
 }
 
 func (p *Profile) validate() error {
@@ -245,6 +295,16 @@ func (p *Profile) ThresholdForSub(parent *CommandSpec, s *SubcommandSpec) int {
 		return s.FailThreshold
 	}
 	return p.ThresholdFor(parent)
+}
+
+// LuaTimeoutFor resolves the effective lua timeout for a command:
+// the command-level lua_timeout, falling back to the profile-level default.
+// Zero means no timeout.
+func (p *Profile) LuaTimeoutFor(c *CommandSpec) time.Duration {
+	if c.luaTimeout > 0 {
+		return c.luaTimeout
+	}
+	return p.luaTimeout
 }
 
 // LuaPath resolves a command's lua script relative to the profile dir.

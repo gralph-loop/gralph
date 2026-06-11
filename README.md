@@ -19,6 +19,7 @@ go build -o gralph .
 
 ```sh
 gralph run profile.yaml [--max-iterations N]
+gralph run --max-iterations N profile.yaml   # 플래그가 앞에 와도 동일
 ```
 
 오케스트레이터는 매 반복 진입 시 내부 `resolveNext()`를 **함수로 직접 호출**해 커서가 `DONE`이면 break, 아니면:
@@ -27,6 +28,18 @@ gralph run profile.yaml [--max-iterations N]
 2. YAML의 `agent.command`를 기동 (`{{prompt}}` 자리에 랄프 프롬프트 치환, `$GRALPH_PROFILE` 환경변수 주입).
 
 매 반복은 새 세션·새 컨텍스트이며, 에이전트는 루프 종료 신호를 볼 일이 없다.
+
+### 종료 동작
+
+- 커서가 `DONE`이면 정상 종료. `--max-iterations` 도달 시 중단.
+- 에이전트 바이너리 자체를 기동할 수 없으면(binary not found 등) 재시도가 무의미하므로 즉시 에러로 종료.
+- 커서 전진 없이 에이전트가 **연속 5회** 비정상 종료하면 에러로 종료. 비정상 종료가 이어지는 동안에는
+  지수 백오프(2s → 4s → 8s → …, 상한 30s)로 대기 후 재시도하며, 커서가 전진하면 카운터는 리셋된다.
+- `agent.timeout` 설정 시 세션이 제한 시간을 넘기면 프로세스를 종료(SIGTERM 후 유예, 이후 kill)하고
+  비정상 종료와 동일하게 취급한다 — 커서는 유지되어 다음 반복에서 재시도.
+- SIGINT/SIGTERM 수신 시 진행 중인 에이전트 프로세스에 시그널을 전파(유예 후 kill)하고
+  `[gralph] interrupted at iteration N (cursor: X)` 형태로 stderr에 보고한 뒤 종료한다.
+  커서는 보존되므로 `gralph run`을 다시 실행하면 중단 지점부터 이어진다.
 
 ## 세션 흐름
 
@@ -121,6 +134,8 @@ gralph.progress.count("sub")  -- (finalize 게이트 한정) 완료 항목 수
 
 - `fail`의 reason은 실패 응답에 실려 같은 세션에서 무엇을 고칠지 알려준다.
 - lua가 `error()`로 죽으면 검증 실패와 구분해 **SCRIPT ERROR**로 분류하되 실패 카운트에는 포함한다.
+- `lua_timeout`(프로파일 기본값 또는 커맨드별 오버라이드)을 넘긴 스크립트는 중단되며,
+  역시 **SCRIPT ERROR**로 분류되어 실패 예산에 포함된다. 설정이 없으면 타임아웃 없음.
 - lua를 지정하지 않은 커맨드는 항상 성공한다 (후보가 2개 이상이면 프로파일 검증 단계에서 에러).
 
 ## 프로파일 YAML 레퍼런스
@@ -128,11 +143,16 @@ gralph.progress.count("sub")  -- (finalize 게이트 한정) 완료 항목 수
 ```yaml
 agent:
   command: ["claude", "-p", "{{prompt}}"]   # 비대화형 에이전트 실행 커맨드
+  timeout: 30m                               # (선택) 세션 제한 시간 (Go duration 문자열).
+                                             # 초과 시 프로세스 종료 후 비정상 종료로 취급
+                                             # (커서 유지, 다음 반복 재시도). 생략 시 무제한
 prompt: |                                    # 랄프 프롬프트 (생략 시 기본문)
   1. `gralph next`로 다음 할 일을 안내받아라.
   2. 커맨드 응답에서 세션 종료 지시를 받으면 세션을 종료하라.
 state_dir: .gralph                           # 상태 디렉터리 (프로파일 기준 상대경로)
 fail_threshold: 5                            # 매 n회째 실패에 세션 종료
+lua_timeout: 30s                             # (선택) lua 스크립트 제한 시간 기본값.
+                                             # 초과 시 SCRIPT ERROR로 실패 카운트. 생략 시 무제한
 
 commands:
   - name: implement
@@ -144,6 +164,7 @@ commands:
     lua: scripts/implement.lua               # 프로파일 기준 상대경로
     next: [verify]                           # 후속 후보
     fail_threshold: 3                        # (선택) 커맨드별 오버라이드
+    lua_timeout: 5s                          # (선택) 커맨드별 lua 제한 시간 오버라이드
 ```
 
 검증 패턴 예시: 작업 리포트를 인자로 제출해 보조 검증, 근거 코드 위치·의견·대안을 구조화 인자로
