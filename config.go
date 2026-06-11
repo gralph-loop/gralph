@@ -181,6 +181,15 @@ func parseTimeout(field, s string) (time.Duration, error) {
 	return d, nil
 }
 
+// reservedCommandNames are built-in CLI words. The dispatcher resolves them
+// before YAML commands, so a custom command (or subcommand -- they share the
+// CLI namespace) with one of these names could never be invoked; the loader
+// rejects them outright.
+var reservedCommandNames = map[string]bool{
+	"run": true, "next": true, "help": true, "version": true,
+	"status": true, "reset": true, "validate": true, "try": true,
+}
+
 func (p *Profile) validate() error {
 	if len(p.Commands) == 0 {
 		return fmt.Errorf("profile: at least one command is required")
@@ -193,6 +202,9 @@ func (p *Profile) validate() error {
 		}
 		if c.Name == DoneCursor {
 			return fmt.Errorf("profile: %q is a reserved command name", DoneCursor)
+		}
+		if reservedCommandNames[c.Name] {
+			return fmt.Errorf("profile: %q is a reserved command name (built-in gralph subcommand)", c.Name)
 		}
 		if _, dup := byName[c.Name]; dup {
 			return fmt.Errorf("profile: duplicate command name %q", c.Name)
@@ -211,6 +223,9 @@ func (p *Profile) validate() error {
 			}
 			if s.Name == DoneCursor {
 				return fmt.Errorf("profile: %q is a reserved command name", DoneCursor)
+			}
+			if reservedCommandNames[s.Name] {
+				return fmt.Errorf("profile: %q is a reserved command name (built-in gralph subcommand)", s.Name)
 			}
 			if _, clash := byName[s.Name]; clash {
 				return fmt.Errorf("profile: subcommand %q of %q clashes with a command name", s.Name, c.Name)

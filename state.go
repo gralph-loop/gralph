@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -80,6 +81,17 @@ func (st *Store) Get(key string) (any, bool) {
 func (st *Store) Set(key string, v any) {
 	st.values[key] = v
 	st.dirtyKeys[key] = struct{}{}
+}
+
+// DirtyKeys lists the keys written during this run but not yet committed,
+// sorted. Used by `gralph try` to preview what a real run would persist.
+func (st *Store) DirtyKeys() []string {
+	keys := make([]string, 0, len(st.dirtyKeys))
+	for k := range st.dirtyKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Commit persists the store. Called only after a command succeeds, so a

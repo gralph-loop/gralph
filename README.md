@@ -150,6 +150,38 @@ gralph.progress.count("sub")  -- (finalize 게이트 한정) 완료 항목 수
   역시 **SCRIPT ERROR**로 분류되어 실패 예산에 포함된다. 설정이 없으면 타임아웃 없음.
 - lua를 지정하지 않은 커맨드는 항상 성공한다 (후보가 2개 이상이면 프로파일 검증 단계에서 에러).
 
+## 운영/디버깅 CLI
+
+```sh
+gralph status [--profile p] [--json]                # 커서·세션·실패 수·쿼터 진행 조회
+gralph reset  [--profile p] [--force] [--failures]  # 상태 초기화 (--failures: 실패 카운터만)
+gralph validate profile.yaml                        # 실행 없이 프로파일 lint
+gralph try <command|subcommand> [--profile p] [--arg value ...]  # 게이트 드라이런
+```
+
+- **`status`** — state.json/progress.json을 읽어 커서, 세션 id, 노드별 실패 수, 그리고 커서
+  노드에 서브커맨드가 있으면 쿼터 진행(완료 key 포함)을 출력한다. `--json`이면 기계 판독용 JSON.
+- **`reset`** — 상태 디렉터리의 state.json/store.json/progress.json을 삭제해 처음부터 다시
+  시작한다. `--failures`만 주면 **실패 카운터만 0으로** 만들고 커서·store·progress는 보존한다.
+  `--force`가 없으면 stdin으로 y/N 확인을 받으며, stdin이 TTY가 아니면 `--force`를 요구한다.
+
+  > **수동 세션 주의**: 오케스트레이터(`gralph run`) 없이 커맨드를 직접 실행하면 세션 회전이
+  > 없어 실패 카운터가 세션 경계 없이 누적된다(매 n회째마다 세션 종료 응답이 나옴). 필요하면
+  > `gralph reset --failures`로 카운터만 초기화하라.
+
+- **`validate`** — 실행 없이 lint: 로더의 모든 검증 규칙에 더해 (1) 각 lua 파일의 존재,
+  (2) lua 문법(gopher-lua로 컴파일만, 실행 안 함), (3) 그래프 경고 — 첫 커맨드에서 도달
+  불가능한 노드, `DONE`(next 없는 노드)에 도달할 수 없어 루프가 끝나지 않는 경우.
+  에러가 있으면 exit 1, 경고만 있으면 exit 0.
+- **`try`** — 커서 검사 없이 해당 노드/서브커맨드의 lua를 드라이런한다. store **읽기는 실제
+  파일**, **쓰기는 메모리에만** 머물고 절대 커밋되지 않으며 실패 카운터·progress·커서도 변하지
+  않는다. 출력: lua 경로, 결과(SUCCESS / FAILED+reason / SCRIPT ERROR), `gralph.route` 선택
+  (있으면), 이번 실행이 store에 쓰려던 key-값 미리보기("(not committed)" 명시). 부모 finalize
+  노드는 현재 progress를 그대로 읽어 `gralph.progress.*`가 동작한다(쿼터 미충족이어도 실행되며
+  경고 한 줄만 출력).
+- 예약어: `run` `next` `help` `version` `status` `reset` `validate` `try`(및 `DONE`)는 내장
+  디스패치가 우선하므로 커맨드/서브커맨드 이름으로 쓸 수 없다(로더가 거부).
+
 ## 프로파일 YAML 레퍼런스
 
 ```yaml
@@ -199,8 +231,8 @@ go build -o example/gralph . && cd example
 
 | 파일 | 내용 |
 |---|---|
-| `main.go` | CLI 디스패치 (`run` / `next` / 동적 커스텀 커맨드) |
-| `config.go` | 프로파일 YAML 파싱·검증 (서브커맨드 규칙 포함) |
+| `main.go` | CLI 디스패치 (`run` / `next` / `status` / `reset` / `validate` / `try` / 동적 커스텀 커맨드) |
+| `config.go` | 프로파일 YAML 파싱·검증 (서브커맨드 규칙·예약어 포함) |
 | `state.go` | 내부 상태(state.json)와 유저 store(store.json, key 단위 머지 커밋) |
 | `progress.go` | 서브커맨드 진행 상태(progress.json): 쿼터 판정, stale 무효화 |
 | `failures.go` | 실패 사유 기록(failures.json): 세션 간 전달, 성공 시 삭제 |
@@ -209,3 +241,5 @@ go build -o example/gralph . && cd example
 | `command.go` | 커스텀 커맨드 실행: 인자 파싱, 성공/실패/임계치, 서브커맨드 fork/join, 커서 전진 |
 | `lua.go` | gopher-lua 브리지 (`gralph` 헬퍼 객체) |
 | `loop.go` | 오케스트레이터 (랄프 반복문) |
+| `ops.go` | 운영 서브커맨드: `status` / `reset` / `validate`(lint) |
+| `try.go` | `try` — 커밋 없는 게이트 드라이런 |
