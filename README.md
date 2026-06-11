@@ -69,6 +69,16 @@ gralph run --max-iterations N profile.yaml   # 플래그가 앞에 와도 동일
 | 1 | 무조건 이동 |
 | ≥2 | lua가 `gralph.route("name")`로 지정. 후보 외 이름·미지정은 런타임 에러(실패로 카운트) |
 
+그래프는 mermaid flowchart로 시각화할 수 있다:
+
+```sh
+gralph graph profile.yaml            # 커맨드 그래프를 stdout에 출력
+gralph graph profile.yaml --state    # 상태 디렉터리를 읽어 현재 커서 노드를 강조
+```
+
+노드는 커맨드(서브커맨드가 있으면 라벨에 `name [sub1 xN, sub2]`로 쿼터 표기),
+마지막 커맨드는 `DONE` 노드로 이어진다. 후보가 2개 이상인 엣지에는 `route`가 표기된다.
+
 ## 서브커맨드 (fork/join 쿼터)
 
 커맨드에 `subcommands:`를 두면 그 노드는 fork/join이 된다: 커서가 부모에 머무는 동안
@@ -126,6 +136,12 @@ commands:
   기록(서브커맨드 라벨 포함)을 안내문 뒤에 덧붙인다. 노드 성공 시 그 라벨의 기록이
   삭제되고, 부모 finalize 성공 시 그 노드의 서브커맨드 기록도 전부 삭제된다.
 - `.gralph-state/lock` — 병렬 `gralph` 프로세스 간 read-modify-write 직렬화용 flock 파일.
+- `.gralph-state/journal.jsonl` — **append-only 이벤트 저널**(JSON Lines): 주요 전이를 한 줄씩 기록해
+  사후 분석을 가능하게 한다. 이벤트는 `session_start`(세션 id·커서·iteration),
+  `command_succeeded`(커맨드·다음 커서·lua 게이트 소요 ms), `command_failed`(라벨·실패 번호·사유),
+  `subitem_recorded`(서브커맨드·key), `loop_done`이고 각 라인에 `at`(RFC3339)이 붙는다.
+  커밋류 이벤트는 state lock 안에서 기록되어 순서가 커밋 순서와 일치한다.
+  저널 쓰기는 **best-effort**: 실패해도 본 흐름을 막지 않는다(stderr 경고 후 무시).
 
 상태 디렉터리(기본 `.gralph-state/`)는 실행 중간 산출물이므로 프로젝트의 `.gitignore`에 넣기를 권장한다.
 
@@ -231,7 +247,7 @@ go build -o example/gralph . && cd example
 
 | 파일 | 내용 |
 |---|---|
-| `main.go` | CLI 디스패치 (`run` / `next` / `status` / `reset` / `validate` / `try` / 동적 커스텀 커맨드) |
+| `main.go` | CLI 디스패치 (`run` / `graph` / `next` / `status` / `reset` / `validate` / `try` / 동적 커스텀 커맨드) |
 | `config.go` | 프로파일 YAML 파싱·검증 (서브커맨드 규칙·예약어 포함) |
 | `state.go` | 내부 상태(state.json)와 유저 store(store.json, key 단위 머지 커밋) |
 | `progress.go` | 서브커맨드 진행 상태(progress.json): 쿼터 판정, stale 무효화 |
@@ -240,6 +256,8 @@ go build -o example/gralph . && cd example
 | `next.go` | `resolveNext()` + 안내문 순수 렌더링 (`{{subprogress}}` 등) |
 | `command.go` | 커스텀 커맨드 실행: 인자 파싱, 성공/실패/임계치, 서브커맨드 fork/join, 커서 전진 |
 | `lua.go` | gopher-lua 브리지 (`gralph` 헬퍼 객체) |
+| `journal.go` | append-only 이벤트 저널(journal.jsonl, best-effort) |
+| `graph.go` | `gralph graph`: 커맨드 그래프 mermaid 렌더링 |
 | `loop.go` | 오케스트레이터 (랄프 반복문) |
 | `ops.go` | 운영 서브커맨드: `status` / `reset` / `validate`(lint) |
 | `try.go` | `try` — 커밋 없는 게이트 드라이런 |

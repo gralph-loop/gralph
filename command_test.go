@@ -402,7 +402,7 @@ func TestFinalizeRejectsStragglerCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err = commitSuccess(p, p.Command("parent"), "wrap", store, true, seen)
+	res, err = commitSuccess(p, p.Command("parent"), "wrap", store, true, seen, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -92,15 +92,18 @@ func runPlainCommand(p *Profile, cmd *CommandSpec, argv []string) (*CommandResul
 
 	// --- deterministic logic (outside the lock; gates may be slow) ------------
 	var outcome LuaOutcome
+	var gateMs int64
 	if lp := p.LuaPath(cmd); lp != "" {
+		gateStart := time.Now()
 		outcome = runLua(lp, p.Dir, args, store, cmd.Next, nil, false, p.LuaTimeoutFor(cmd))
+		gateMs = time.Since(gateStart).Milliseconds()
 	}
 
 	next := resolveSuccessor(cmd, &outcome)
 	if outcome.Failed || outcome.ScriptErr != nil {
 		return commitFailure(p, cmd.Name, cmd.Name, p.ThresholdFor(cmd), outcome)
 	}
-	return commitSuccess(p, cmd, next, store, false, 0)
+	return commitSuccess(p, cmd, next, store, false, 0, gateMs)
 }
 
 // runSubcommand validates one work item of a parent's quota and records it in
@@ -204,6 +207,12 @@ func runSubcommand(p *Profile, parent *CommandSpec, sub *SubcommandSpec, argv []
 				return err
 			}
 		}
+		appendJournal(p.StateDir, JournalEvent{
+			Event:      EvSubitemRecorded,
+			Session:    st.SessionID,
+			Subcommand: sub.Name,
+			Key:        itemKey,
+		})
 		if st.Cursor == "" {
 			// First run before any resolveNext: persist the implicit cursor
 			// so on-disk state matches what just got recorded.
@@ -265,15 +274,18 @@ func runParentFinalize(p *Profile, cmd *CommandSpec, argv []string) (*CommandRes
 
 	// --- deterministic logic (outside the lock; gates may be slow) ------------
 	var outcome LuaOutcome
+	var gateMs int64
 	if lp := p.LuaPath(cmd); lp != "" {
+		gateStart := time.Now()
 		outcome = runLua(lp, p.Dir, args, store, cmd.Next, pr, false, p.LuaTimeoutFor(cmd))
+		gateMs = time.Since(gateStart).Milliseconds()
 	}
 
 	next := resolveSuccessor(cmd, &outcome)
 	if outcome.Failed || outcome.ScriptErr != nil {
 		return commitFailure(p, cmd.Name, cmd.Name, p.ThresholdFor(cmd), outcome)
 	}
-	return commitSuccess(p, cmd, next, store, true, seenDone)
+	return commitSuccess(p, cmd, next, store, true, seenDone, gateMs)
 }
 
 // resolveSuccessor decides the next cursor on (tentative) success, turning a
@@ -331,6 +343,18 @@ func commitFailure(p *Profile, label, counterKey string, threshold int, outcome 
 			return err
 		}
 
+		jreason := reason
+		if outcome.ScriptErr != nil {
+			jreason = "script error: " + reason
+		}
+		appendJournal(p.StateDir, JournalEvent{
+			Event:   EvCommandFailed,
+			Session: st.SessionID,
+			Command: label,
+			Failure: count,
+			Reason:  jreason,
+		})
+
 		end := count%threshold == 0
 		var b strings.Builder
 		if outcome.ScriptErr != nil {
@@ -362,7 +386,8 @@ func commitFailure(p *Profile, label, counterKey string, threshold int, outcome 
 // refused (no budget consumed) and the agent re-runs the finalize. Quotas
 // are monotonic, so the re-run passes the quota check and the lua simply
 // validates the now-complete progress.
-func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clearProgress bool, seenDone int) (*CommandResult, error) {
+// gateMs is the measured lua gate duration, journaled for post-hoc analysis.
+func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clearProgress bool, seenDone int, gateMs int64) (*CommandResult, error) {
 	var res *CommandResult
 	err := withStateLock(p.StateDir, func() error {
 		st, err := LoadState(p.StateDir)
@@ -426,6 +451,13 @@ func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clea
 		if err := st.Save(p.StateDir); err != nil {
 			return err
 		}
+		appendJournal(p.StateDir, JournalEvent{
+			Event:   EvCommandSucceeded,
+			Session: st.SessionID,
+			Command: cmd.Name,
+			Next:    next,
+			GateMs:  gateMs,
+		})
 
 		msg := fmt.Sprintf("OK: `%s` succeeded.", cmd.Name)
 		if next == DoneCursor {
