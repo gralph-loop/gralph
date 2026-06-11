@@ -52,6 +52,50 @@ commands:                       # required; ≥1
 | `lua` | see rules | Path (relative to profile) to the validation/routing script. Optional — but **required if `next` has ≥2 entries**. Without Lua a command always succeeds. |
 | `next` | no | Successor command names. 0 → terminal (success → `DONE`); 1 → unconditional; ≥2 → Lua must `gralph.route`. Every name must be an existing command. |
 | `fail_threshold` | no | Overrides the profile threshold for this node only. |
+| `subcommands` | no | Turns the node into a fork/join with quotas. See below. |
+
+## Subcommands (fork/join quotas)
+
+A command with `subcommands:` does not succeed once; instead, while the cursor
+sits on it, each subcommand must succeed once per **distinct work-item key**,
+`count` times in total. Only after every quota is met does the parent command
+itself become runnable — it then acts as the finalize gate (aggregate
+verification + routing) and its success advances the cursor. Built for agents
+that can spawn parallel sub-agents: each worker runs one
+`gralph <subcommand> --<key> <item>` and the state-dir flock keeps concurrent
+commits safe.
+
+```yaml
+- name: build-all
+  guidance: |
+    Remaining work: {{subprogress}}
+    Spawn one sub-agent per remaining item.
+    When all quotas are met RUN: gralph build-all
+  subcommands:
+    - name: make-part            # shares the CLI namespace: globally unique
+      count: 3                   # quota: 3 distinct keys (default 1)
+      key: part                  # names the arg identifying the work item;
+                                 # required when count > 1; forced required
+      args:
+        - name: part
+      lua: scripts/part.lua      # per-item gate; gralph.route is forbidden
+      fail_threshold: 3          # optional; budget counts per (sub, key)
+  lua: scripts/finalize.lua      # finalize gate; sees gralph.progress.*
+  next: [wrap]
+```
+
+Semantics worth designing around:
+
+- A duplicate key, or running the parent before quotas are met, is rejected
+  **without consuming the failure budget** (like a wrong-command call).
+- Subcommand successes persist in `progress.json` across sessions; they reset
+  only when the parent succeeds, so a graph cycle that revisits the node
+  restarts the quotas.
+- Subcommand success responses still say "End the session now" — a parallel
+  sub-agent worker just ends itself; an agent without sub-agent support can
+  do one item per session serially and resume.
+- Store convention for parallel gates: namespace writes by key
+  (`gralph.store.set("ev:" .. gralph.args.part, ...)`); commits merge per key.
 
 ## Guidance templating
 
@@ -62,6 +106,10 @@ Only two things are available:
   unset). Use it to feed forward evidence written by an earlier gate (the goal,
   a path, a count, an attempt number).
 - `{{.Cursor}}` → the current command's name.
+
+Nodes with `subcommands:` additionally get `{{subprogress}}` (multi-line quota
+view), `{{subdone "sub"}}` (completed keys) and `{{subcount "sub"}}`; `gralph
+next` also auto-appends a progress block so a fresh session can always resume.
 
 Always end guidance with the exact `RUN:` line the agent should execute,
 including arguments, so there's no ambiguity about what command closes the node.
@@ -76,6 +124,9 @@ The profile is rejected if any of these hold:
 - Two commands share a `name`.
 - A `next:` entry names a command that doesn't exist.
 - A command has more than one `next:` candidate but no `lua:` to route them.
+- A subcommand has an empty or reserved name, or its name collides with any
+  command or other subcommand (they share the CLI namespace).
+- A subcommand has `count` > 1 but no `key`, or its `key` is not a declared arg.
 
 These are deterministic, static checks. `scripts/lint_profile.py` reproduces
 them (plus extra style/anti-pattern lints) so you can catch problems before

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // CommandResult is what gets printed back to the agent.
@@ -13,7 +14,8 @@ type CommandResult struct {
 }
 
 // runCustomCommand handles `gralph <name> --arg value ...` invoked by the
-// agent inside a session.
+// agent inside a session. <name> is either a command (graph node) or a
+// subcommand of one.
 //
 // Contract (shared by every custom command):
 //   - success  -> cursor advances immediately, store is committed, and the
@@ -21,6 +23,12 @@ type CommandResult struct {
 //   - failure  -> the session stays alive so the agent can retry, except on
 //     every n-th failure (default 5) the response also ends the session,
 //     forcing a fresh session / fresh context on the next loop iteration.
+//
+// Commands with subcommands relax the first rule into a fork/join: while the
+// cursor is on the parent, each subcommand must succeed once per distinct
+// work-item key until every quota is met; only then does the parent itself
+// run (as the finalize gate) and advance the cursor. A subcommand success
+// still ends the (sub-)session, but the cursor stays on the parent.
 func runCustomCommand(p *Profile, name string, argv []string) (*CommandResult, error) {
 	st, err := LoadState(p.StateDir)
 	if err != nil {
@@ -37,27 +45,198 @@ func runCustomCommand(p *Profile, name string, argv []string) (*CommandResult, e
 		}, nil
 	}
 
-	cmd := p.Command(name)
-	if cmd == nil {
-		return nil, fmt.Errorf("unknown command %q (run `gralph next` to see what to do)", name)
+	if cmd := p.Command(name); cmd != nil {
+		// Only the instructed (= cursor) command may run in this session.
+		if name != st.Cursor {
+			return &CommandResult{
+				Message: fmt.Sprintf(
+					"`%s` is not the current command. The current command is `%s`. Run `gralph next` for instructions.",
+					name, st.Cursor),
+				ExitCode: 1,
+			}, nil
+		}
+		if len(cmd.Subcommands) > 0 {
+			return runParentFinalize(p, cmd, argv)
+		}
+		return runPlainCommand(p, cmd, argv)
 	}
 
-	// Only the instructed (= cursor) command may run in this session.
-	if name != st.Cursor {
-		return &CommandResult{
-			Message: fmt.Sprintf(
-				"`%s` is not the current command. The current command is `%s`. Run `gralph next` for instructions.",
-				name, st.Cursor),
-			ExitCode: 1,
-		}, nil
+	if sub, parent := p.Subcommand(name); sub != nil {
+		if parent.Name != st.Cursor {
+			return &CommandResult{
+				Message: fmt.Sprintf(
+					"`%s` is a subcommand of `%s`, which is not the current command. The current command is `%s`. Run `gralph next` for instructions.",
+					name, parent.Name, st.Cursor),
+				ExitCode: 1,
+			}, nil
+		}
+		return runSubcommand(p, parent, sub, argv)
 	}
 
-	args, err := parseArgs(cmd, argv)
+	return nil, fmt.Errorf("unknown command %q (run `gralph next` to see what to do)", name)
+}
+
+// runPlainCommand is the classic single-success node: validate, then advance.
+func runPlainCommand(p *Profile, cmd *CommandSpec, argv []string) (*CommandResult, error) {
+	args, err := parseArgs(cmd.Name, cmd.Args, argv)
 	if err != nil {
 		// Argument-shape mistakes are usage errors, not validation failures:
 		// they don't consume the failure budget.
+		return &CommandResult{Message: "usage error: " + err.Error(), ExitCode: 1}, nil
+	}
+
+	store, err := LoadStore(p.StateDir)
+	if err != nil {
+		return nil, err
+	}
+
+	// --- deterministic logic (outside the lock; gates may be slow) ------------
+	var outcome LuaOutcome
+	if lp := p.LuaPath(cmd); lp != "" {
+		outcome = runLua(lp, args, store, cmd.Next, nil, false)
+	}
+
+	next := resolveSuccessor(cmd, &outcome)
+	if outcome.Failed || outcome.ScriptErr != nil {
+		return commitFailure(p, cmd.Name, cmd.Name, p.ThresholdFor(cmd), outcome)
+	}
+	return commitSuccess(p, cmd, next, store, false)
+}
+
+// runSubcommand validates one work item of a parent's quota and records it in
+// the progress file. The cursor does not move.
+func runSubcommand(p *Profile, parent *CommandSpec, sub *SubcommandSpec, argv []string) (*CommandResult, error) {
+	args, err := parseArgs(sub.Name, sub.Args, argv)
+	if err != nil {
+		return &CommandResult{Message: "usage error: " + err.Error(), ExitCode: 1}, nil
+	}
+
+	itemKey := sub.Name // single-slot subcommand (count 1, no key arg)
+	if sub.Key != "" {
+		itemKey = strings.TrimSpace(args[sub.Key])
+		if itemKey == "" {
+			return &CommandResult{
+				Message:  fmt.Sprintf("usage error: --%s (the work-item key) must not be empty", sub.Key),
+				ExitCode: 1,
+			}, nil
+		}
+	}
+
+	// Early duplicate check: fast feedback only. The authoritative check runs
+	// again under the lock at commit time, because two workers may pass the
+	// gate for the same key concurrently.
+	pr, err := LoadProgress(p.StateDir, parent.Name)
+	if err != nil {
+		return nil, err
+	}
+	if _, dup := pr.Done[sub.Name][itemKey]; dup {
+		return duplicateResult(parent, sub, itemKey, pr), nil
+	}
+
+	store, err := LoadStore(p.StateDir)
+	if err != nil {
+		return nil, err
+	}
+
+	// --- deterministic logic (outside the lock; gates may be slow) ------------
+	var outcome LuaOutcome
+	if lp := p.SubLuaPath(sub); lp != "" {
+		outcome = runLua(lp, args, store, nil, nil, true)
+	}
+
+	if outcome.Failed || outcome.ScriptErr != nil {
+		// Failures are budgeted per (subcommand, key) so one stuck worker
+		// doesn't recycle its siblings.
+		label := fmt.Sprintf("%s (%s)", sub.Name, itemKey)
+		return commitFailure(p, label, sub.Name+":"+itemKey, p.ThresholdForSub(parent, sub), outcome)
+	}
+
+	// --- locked commit ---------------------------------------------------------
+	var res *CommandResult
+	err = withStateLock(p.StateDir, func() error {
+		st, err := LoadState(p.StateDir)
+		if err != nil {
+			return err
+		}
+		// The cursor may have moved while the gate ran (a straggler worker
+		// after the parent finalized). Recording then would poison a future
+		// revisit of the node, so re-check.
+		cur := st.Cursor
+		if cur == "" {
+			cur = p.FirstCommand().Name
+		}
+		if cur != parent.Name {
+			res = &CommandResult{
+				Message: fmt.Sprintf(
+					"`%s` is no longer runnable: the current command is `%s`. Run `gralph next` for instructions.",
+					sub.Name, st.Cursor),
+				ExitCode: 1,
+			}
+			return nil
+		}
+		pr, err := LoadProgress(p.StateDir, parent.Name)
+		if err != nil {
+			return err
+		}
+		if _, dup := pr.Done[sub.Name][itemKey]; dup {
+			// Another worker committed this key while our gate ran. The item
+			// is done either way; reject without consuming the budget.
+			res = duplicateResult(parent, sub, itemKey, pr)
+			return nil
+		}
+		if err := store.Commit(p.StateDir); err != nil {
+			return err
+		}
+		pr.Record(sub.Name, itemKey, DoneMeta{
+			At:      time.Now().UTC().Format(time.RFC3339),
+			Session: st.SessionID,
+		})
+		if err := pr.Save(p.StateDir); err != nil {
+			return err
+		}
+		if st.Cursor == "" {
+			// First run before any resolveNext: persist the implicit cursor
+			// so on-disk state matches what just got recorded.
+			st.Cursor = parent.Name
+			if err := st.Save(p.StateDir); err != nil {
+				return err
+			}
+		}
+		msg := fmt.Sprintf("OK: `%s` (%s) recorded. Progress: %s.", sub.Name, itemKey, pr.QuotaStatus(parent))
+		if pr.QuotasMet(parent) {
+			msg += fmt.Sprintf(" All subcommand quotas met; `%s` is now runnable.", parent.Name)
+		}
+		msg += " End the session now."
+		res = &CommandResult{Message: msg, EndSession: true}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// runParentFinalize runs a subcommand-bearing node as its own finalize gate:
+// rejected until every quota is met, then validated (with read access to the
+// completed work items) and, on success, the progress is cleared and the
+// cursor advances.
+func runParentFinalize(p *Profile, cmd *CommandSpec, argv []string) (*CommandResult, error) {
+	args, err := parseArgs(cmd.Name, cmd.Args, argv)
+	if err != nil {
+		return &CommandResult{Message: "usage error: " + err.Error(), ExitCode: 1}, nil
+	}
+
+	// Sequencing error, like running the wrong command: no budget consumed.
+	// Quotas are monotonic, so no re-check is needed at commit time.
+	pr, err := LoadProgress(p.StateDir, cmd.Name)
+	if err != nil {
+		return nil, err
+	}
+	if !pr.QuotasMet(cmd) {
 		return &CommandResult{
-			Message:  "usage error: " + err.Error(),
+			Message: fmt.Sprintf(
+				"`%s` is not runnable yet: subcommand quotas not met (%s). Run the remaining subcommands first.",
+				cmd.Name, pr.QuotaStatus(cmd)),
 			ExitCode: 1,
 		}, nil
 	}
@@ -67,82 +246,140 @@ func runCustomCommand(p *Profile, name string, argv []string) (*CommandResult, e
 		return nil, err
 	}
 
-	// --- deterministic logic -------------------------------------------------
+	// --- deterministic logic (outside the lock; gates may be slow) ------------
 	var outcome LuaOutcome
 	if lp := p.LuaPath(cmd); lp != "" {
-		outcome = runLua(lp, args, store, cmd.Next)
+		outcome = runLua(lp, args, store, cmd.Next, pr, false)
 	}
 
-	// Routing resolution on (tentative) success.
-	next := ""
-	if !outcome.Failed && outcome.ScriptErr == nil {
-		switch len(cmd.Next) {
-		case 0:
-			next = DoneCursor // last command
-		case 1:
-			next = cmd.Next[0] // unconditional move
-		default:
-			if outcome.Route == "" {
-				outcome.ScriptErr = fmt.Errorf(
-					"lua finished without gralph.route() but %q has %d successor candidates %v",
-					cmd.Name, len(cmd.Next), cmd.Next)
-			} else {
-				next = outcome.Route
-			}
-		}
-	}
-
-	// --- failure path ---------------------------------------------------------
+	next := resolveSuccessor(cmd, &outcome)
 	if outcome.Failed || outcome.ScriptErr != nil {
-		st.Failures[name]++
-		count := st.Failures[name]
+		return commitFailure(p, cmd.Name, cmd.Name, p.ThresholdFor(cmd), outcome)
+	}
+	return commitSuccess(p, cmd, next, store, true)
+}
+
+// resolveSuccessor decides the next cursor on (tentative) success, turning a
+// missing gralph.route into a script error when the node branches.
+func resolveSuccessor(cmd *CommandSpec, outcome *LuaOutcome) string {
+	if outcome.Failed || outcome.ScriptErr != nil {
+		return ""
+	}
+	switch len(cmd.Next) {
+	case 0:
+		return DoneCursor // last command
+	case 1:
+		return cmd.Next[0] // unconditional move
+	default:
+		if outcome.Route == "" {
+			outcome.ScriptErr = fmt.Errorf(
+				"lua finished without gralph.route() but %q has %d successor candidates %v",
+				cmd.Name, len(cmd.Next), cmd.Next)
+			return ""
+		}
+		return outcome.Route
+	}
+}
+
+// commitFailure increments the failure counter under the state lock and
+// builds the retry / end-session response. counterKey is the st.Failures key
+// (subcommands use "name:key"); label is what the agent sees.
+func commitFailure(p *Profile, label, counterKey string, threshold int, outcome LuaOutcome) (*CommandResult, error) {
+	var res *CommandResult
+	err := withStateLock(p.StateDir, func() error {
+		st, err := LoadState(p.StateDir)
+		if err != nil {
+			return err
+		}
+		st.Failures[counterKey]++
+		count := st.Failures[counterKey]
 		if err := st.Save(p.StateDir); err != nil {
-			return nil, err
+			return err
 		}
 		// Store is intentionally NOT committed on failure.
 
-		threshold := p.ThresholdFor(cmd)
 		end := count%threshold == 0
-
 		var b strings.Builder
 		if outcome.ScriptErr != nil {
-			fmt.Fprintf(&b, "SCRIPT ERROR in `%s` (failure %d): %v\n", name, count, outcome.ScriptErr)
+			fmt.Fprintf(&b, "SCRIPT ERROR in `%s` (failure %d): %v\n", label, count, outcome.ScriptErr)
 		} else {
-			fmt.Fprintf(&b, "FAILED `%s` (failure %d): %s\n", name, count, outcome.FailReason)
+			fmt.Fprintf(&b, "FAILED `%s` (failure %d): %s\n", label, count, outcome.FailReason)
 		}
 		if end {
 			b.WriteString("Too many failures in this session. End the session now.")
 		} else {
 			b.WriteString("Fix the issue and run the command again in this session.")
 		}
-		return &CommandResult{Message: b.String(), EndSession: end, ExitCode: 1}, nil
-	}
+		res = &CommandResult{Message: b.String(), EndSession: end, ExitCode: 1}
+		return nil
+	})
+	return res, err
+}
 
-	// --- success path -----------------------------------------------------------
-	// Cursor advances immediately; the next loop's `next` renders the new
-	// node's guidance from the (committed) store.
-	if err := store.Commit(p.StateDir); err != nil {
-		return nil, err
-	}
-	st.Cursor = next
-	if err := st.Save(p.StateDir); err != nil {
-		return nil, err
-	}
+// commitSuccess advances the cursor under the state lock. For a parent
+// finalize (clearProgress) the write order is load-bearing: clear the
+// progress file BEFORE advancing the cursor, so a crash in between leaves
+// the cursor on the parent with empty progress -- the sub work is redone,
+// but a stale quota can never carry over into a later revisit of the node.
+func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clearProgress bool) (*CommandResult, error) {
+	var res *CommandResult
+	err := withStateLock(p.StateDir, func() error {
+		st, err := LoadState(p.StateDir)
+		if err != nil {
+			return err
+		}
+		cur := st.Cursor
+		if cur == "" {
+			cur = p.FirstCommand().Name
+		}
+		if cur != cmd.Name {
+			res = &CommandResult{
+				Message: fmt.Sprintf(
+					"`%s` is no longer the current command. The current command is `%s`. Run `gralph next` for instructions.",
+					cmd.Name, st.Cursor),
+				ExitCode: 1,
+			}
+			return nil
+		}
+		if clearProgress {
+			if err := ClearProgress(p.StateDir); err != nil {
+				return err
+			}
+		}
+		if err := store.Commit(p.StateDir); err != nil {
+			return err
+		}
+		st.Cursor = next
+		if err := st.Save(p.StateDir); err != nil {
+			return err
+		}
 
-	msg := fmt.Sprintf("OK: `%s` succeeded.", name)
-	if next == DoneCursor {
-		msg += " All work is complete."
+		msg := fmt.Sprintf("OK: `%s` succeeded.", cmd.Name)
+		if next == DoneCursor {
+			msg += " All work is complete."
+		}
+		msg += " End the session now."
+		res = &CommandResult{Message: msg, EndSession: true}
+		return nil
+	})
+	return res, err
+}
+
+func duplicateResult(parent *CommandSpec, sub *SubcommandSpec, key string, pr *Progress) *CommandResult {
+	return &CommandResult{
+		Message: fmt.Sprintf(
+			"`%s` (%s) is already completed. Progress: %s. Pick a remaining work item.",
+			sub.Name, key, pr.QuotaStatus(parent)),
+		ExitCode: 1,
 	}
-	msg += " End the session now."
-	return &CommandResult{Message: msg, EndSession: true}, nil
 }
 
 // parseArgs accepts `--name value` (or `--name=value`) pairs and checks them
-// against the command's YAML arg spec.
-func parseArgs(cmd *CommandSpec, argv []string) (map[string]string, error) {
+// against the YAML arg spec.
+func parseArgs(cmdName string, specs []ArgSpec, argv []string) (map[string]string, error) {
 	declared := map[string]*ArgSpec{}
-	for i := range cmd.Args {
-		declared[cmd.Args[i].Name] = &cmd.Args[i]
+	for i := range specs {
+		declared[specs[i].Name] = &specs[i]
 	}
 
 	got := map[string]string{}
@@ -164,7 +401,7 @@ func parseArgs(cmd *CommandSpec, argv []string) (map[string]string, error) {
 			val = argv[i]
 		}
 		if _, ok := declared[key]; !ok {
-			return nil, fmt.Errorf("unknown argument --%s for command %q", key, cmd.Name)
+			return nil, fmt.Errorf("unknown argument --%s for command %q", key, cmdName)
 		}
 		got[key] = val
 	}

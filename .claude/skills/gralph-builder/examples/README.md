@@ -9,6 +9,11 @@ run end-to-end and lint clean (`scripts/lint_profile.py`).
 | `tdd-loop/` | coding | run-the-checker (`os.execute` on the test/build command), routing on the real exit code, artifact-exists, semver validation |
 | `release-notes/` | writing / docs | structured-evidence cross-check (cited PRs must exist in the source), content checks, in-session retry on a fixable failure |
 
+For a fork/join (subcommand quota) workflow with a fake agent that spawns real
+parallel workers, see the upstream repo's `example/subcommands/` — it
+demonstrates per-item gates, a finalize gate using `gralph.progress.*`, and
+resuming partial progress across sessions.
+
 ## Running either one
 
 Put a `gralph` binary on your `PATH` (the fake agent calls `gralph next`). If

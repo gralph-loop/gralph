@@ -102,6 +102,82 @@ def main(argv):
             err(f'duplicate command name "{name}"')
         by_name[name] = c
 
+    # ---- subcommands (fork/join quotas), mirroring config.go ------------
+    sub_names = {}  # sub name -> parent name (shares the CLI namespace)
+    for name, c in by_name.items():
+        subs = c.get("subcommands") or []
+        if not isinstance(subs, list):
+            err(f'command "{name}": subcommands must be a list')
+            continue
+        for j, s in enumerate(subs):
+            if not isinstance(s, dict):
+                err(f'command "{name}" subcommand #{j + 1} is not a mapping')
+                continue
+            sn = s.get("name", "")
+            if not sn:
+                err(f'command "{name}" subcommand #{j + 1} has no name')
+                continue
+            if sn == RESERVED:
+                err(f'"{RESERVED}" is a reserved command name')
+            if sn in by_name:
+                err(f'subcommand "{sn}" of "{name}" clashes with a command name')
+            if sn in sub_names:
+                err(f'duplicate subcommand name "{sn}" (in "{sub_names[sn]}" '
+                    f'and "{name}")')
+            sub_names[sn] = name
+
+            count = s.get("count", 1)
+            if not isinstance(count, int) or count <= 0:
+                count = 1
+            key = s.get("key")
+            arg_names = [a.get("name") for a in (s.get("args") or [])
+                         if isinstance(a, dict)]
+            if count > 1 and not key:
+                err(f'subcommand "{sn}" of "{name}" has count {count} but no '
+                    f"key to distinguish work items")
+            if key and key not in arg_names:
+                err(f'subcommand "{sn}" of "{name}": key "{key}" is not a '
+                    f"declared arg")
+            if "next" in s:
+                err(f'subcommand "{sn}" of "{name}" declares next: — '
+                    f"subcommands cannot route; routing belongs to the parent")
+
+            slua = s.get("lua")
+            if slua:
+                slua_path = slua if os.path.isabs(slua) \
+                    else os.path.join(profile_dir, slua)
+                if not os.path.exists(slua_path):
+                    err(f'subcommand "{sn}": lua script not found at {slua_path}')
+                else:
+                    try:
+                        with open(slua_path, "r", encoding="utf-8") as fh:
+                            src = fh.read()
+                    except OSError:
+                        src = ""
+                    if "gralph.route" in src:
+                        warn(f'subcommand "{sn}": lua calls gralph.route() — '
+                             f"that's a SCRIPT ERROR in subcommand gates.")
+                    if "gralph.fail" not in src and not re.search(
+                            r"os\.execute|io\.popen|io\.open", src):
+                        warn(f'subcommand "{sn}": lua never calls gralph.fail '
+                             f"and runs no os.execute/io check — any fresh key "
+                             f"would pass. Is this a real gate?")
+            else:
+                warn(f'subcommand "{sn}" of "{name}" has no lua — any '
+                     f"invocation with a fresh key succeeds. Add a per-item "
+                     f"deterministic gate.")
+            for a in (s.get("args") or []):
+                an = (a.get("name") or "").lower() if isinstance(a, dict) else ""
+                if an in {"ok", "done", "success", "passed", "confirm",
+                          "confirmed"}:
+                    warn(f'subcommand "{sn}": arg --{an} looks like '
+                         f"self-attestation. Gate on an artifact, not the "
+                         f"agent's claim.")
+        if subs and not c.get("lua"):
+            warn(f'command "{name}" has subcommand quotas but no finalize lua '
+                 f"— the parent will succeed on quota alone with no aggregate "
+                 f"verification.")
+
     for name, c in by_name.items():
         nxt = c.get("next") or []
         if not isinstance(nxt, list):

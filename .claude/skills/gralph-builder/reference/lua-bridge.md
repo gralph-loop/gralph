@@ -14,8 +14,15 @@ agent's args and the user store exposed through the global `gralph` table.
 | `gralph.args.<name>` | The arg's value as a **string** (declared args only). Use `tonumber()` for numbers. Absent → `nil`. |
 | `gralph.store.get("key")` | The stored value (scalar, or nested table for JSON arrays/objects). `nil` if unset. |
 | `gralph.store.set("key", v)` | Write to the user store. **Committed only if the command succeeds.** Accepts scalars and (nested) tables. |
-| `gralph.route("name")` | Choose the successor when the node has ≥2 candidates. `name` must be in the node's `next:` list, else runtime error. No-op-meaningful for 0/1 successors. |
+| `gralph.route("name")` | Choose the successor when the node has ≥2 candidates. `name` must be in the node's `next:` list, else runtime error. No-op-meaningful for 0/1 successors. **Forbidden in subcommand gates** (SCRIPT ERROR): routing belongs to the parent finalize gate. |
 | `gralph.fail("reason: ...")` | Mark a validation failure. The script may keep running; first reason wins. If never called (and no `error()`), the run succeeds. The reason is shown to the agent as a repair instruction. |
+| `gralph.progress.keys("sub")` | *(parent finalize gates only)* Sorted array of the subcommand's completed work-item keys. |
+| `gralph.progress.count("sub")` | *(parent finalize gates only)* Number of completed items for that subcommand. |
+
+Parallel-worker notes (subcommand gates): the gate runs **outside** the state
+lock and sees a store snapshot from its own load; commits merge only the keys
+this run wrote. Namespace store writes by the work-item key
+(`gralph.store.set("ev:" .. gralph.args.part, ...)`) so workers never collide.
 
 ### Success vs failure vs crash
 

@@ -1,0 +1,44 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt가 필요한 파일:"; echo "$out"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Cross-compile check
+        # 릴리즈(build.sh)가 windows/darwin도 빌드하므로, flock 등
+        # 플랫폼 민감 코드가 깨지지 않는지 컴파일만 확인한다.
+        run: |
+          GOOS=windows GOARCH=amd64 go build -o /dev/null .
+          GOOS=darwin  GOARCH=arm64 go build -o /dev/null .
+
+      - name: Tests (race detector)
+        # loop_test.go의 e2e가 임시 디렉터리에 프로파일·가짜 에이전트를
+        # 생성해 실제 오케스트레이터 루프까지 검증한다 (example/ 비의존).
+        run: go test -race -count=1 ./...

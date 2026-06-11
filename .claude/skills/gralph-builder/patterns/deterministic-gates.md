@@ -161,6 +161,66 @@ recipe 1 and let `next: [verify]` from a `fix` node form the retry loop (see
 
 ---
 
+## 7. Fork/join quota (per-item gate + finalize gate)
+
+**Proves:** N distinct work items were each individually verified, then the
+aggregate was verified — with the items processable by parallel sub-agents.
+
+**Use when** a step is really "do X for each of N things" (implement N
+features, convert N files, review N modules). Declare `subcommands:` on the
+node; gralph tracks completed item keys in `progress.json`, rejects duplicate
+keys and premature finalize calls without burning the failure budget, and
+serializes concurrent commits with a state-dir lock.
+
+```yaml
+- name: convert-all
+  guidance: |
+    Remaining: {{subprogress}}
+    Spawn one sub-agent per remaining file; each runs:
+    RUN: gralph convert --file <name>
+    When every quota is met RUN: gralph convert-all
+  subcommands:
+    - name: convert
+      count: 5
+      key: file               # the arg that identifies the item
+      args: [{ name: file }]
+      lua: scripts/convert.lua
+  lua: scripts/finalize.lua
+  next: [ship]
+```
+
+```lua
+-- scripts/convert.lua — per-item gate. Verify THIS item's artifact; runs
+-- outside the lock, so heavy checks here still execute in parallel.
+local f = gralph.args.file
+if os.execute("python3 -c 'import json;json.load(open(\"out/" .. f .. ".json\"))' 2>/dev/null") ~= 0 then
+  gralph.fail("reason: out/" .. f .. ".json missing or not valid JSON")
+  return
+end
+-- namespace evidence by the item key: commits merge per key, so parallel
+-- workers never clobber each other
+gralph.store.set("converted:" .. f, true)
+```
+
+```lua
+-- scripts/finalize.lua — aggregate gate. Only here is gralph.progress
+-- available; re-check the whole set, then route.
+for _, f in ipairs(gralph.progress.keys("convert")) do
+  if io.open("out/" .. f .. ".json", "r") == nil then
+    gralph.fail("reason: out/" .. f .. ".json vanished after verification")
+    return
+  end
+end
+```
+
+Two rules this recipe enforces by construction: the **key must name the work
+item** (so "N times" means N distinct verified items, not N invocations of the
+same one), and **routing lives in the finalize gate** — under parallel workers
+"the last subcommand" is non-deterministic, so per-item gates may not call
+`gralph.route`.
+
+---
+
 ## Anti-patterns to refuse or rewrite
 
 - **`--ok yes` / `--done true`** with Lua that only checks the literal string.
@@ -173,3 +233,8 @@ recipe 1 and let `next: [verify]` from a `fix` node form the retry loop (see
 - **Bumping a counter then failing** — the `store.set` is discarded on failure
   (see the attempts gotcha in `reference/execution-model.md`). Don't rely on it.
 - **A branching node with no `lua:`** — the profile won't even load.
+- **A "do it N times" loop where the gate doesn't bind the work to a key** —
+  the agent can resubmit the same artifact N times. Use a subcommand with
+  `key:` (recipe 7) or make each pass's gate check a distinct artifact.
+- **Routing from a per-item (subcommand) gate** — it's a SCRIPT ERROR, and by
+  design: under parallel workers the "last" item is non-deterministic.

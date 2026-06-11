@@ -54,11 +54,58 @@ gralph run profile.yaml [--max-iterations N]
 | 1 | 무조건 이동 |
 | ≥2 | lua가 `gralph.route("name")`로 지정. 후보 외 이름·미지정은 런타임 에러(실패로 카운트) |
 
-## 상태 저장 (두 파일 분리)
+## 서브커맨드 (fork/join 쿼터)
+
+커맨드에 `subcommands:`를 두면 그 노드는 fork/join이 된다: 커서가 부모에 머무는 동안
+각 서브커맨드를 **서로 다른 작업 항목 key당 한 번씩, `count`회** 성공시켜야 하고,
+모든 쿼터가 차면 비로소 부모 커맨드 자신이 실행 가능해진다(집계 검증 + 라우팅을 맡는
+finalize 게이트). 부모가 성공해야 커서가 전진한다.
+
+```yaml
+commands:
+  - name: build-all
+    guidance: |
+      남은 작업: {{subprogress}}
+      서브에이전트를 병렬로 띄워 각 항목을 처리하라.
+    subcommands:
+      - name: make-part
+        count: 3                  # 서로 다른 key 3개가 성공해야 함 (기본 1)
+        key: part                 # 작업 항목 식별 인자 (count>1이면 필수, 자동 required)
+        args:
+          - { name: part }
+        lua: scripts/part.lua     # 항목 단위 검증 (gralph.route 사용 불가)
+        fail_threshold: 3         # (선택) (서브커맨드, key) 단위 실패 예산
+    lua: scripts/finalize.lua     # 쿼터 충족 후 부모 호출 시 실행되는 집계 게이트
+    next: [wrap]
+```
+
+규칙:
+
+- 서브커맨드 이름은 커맨드와 같은 CLI 네임스페이스를 쓰므로 전역 유일해야 한다.
+- 같은 key 재제출, 쿼터 미충족 상태의 부모 호출은 **실패 예산을 소모하지 않고** 거부된다.
+- 서브커맨드 성공 응답도 "세션을 종료하라"이다 — 병렬 서브에이전트라면 그 워커만 끝나고,
+  서브에이전트가 없는 에이전트는 세션당 한 항목씩 직렬로 진행해도 이어진다(진행은 영속).
+- 진행 상태는 세션 회전에서 살아남고, 부모 성공 시에만 초기화된다(사이클 재방문 시 쿼터 재시작).
+- 병렬 워커의 `gralph <subcommand>` 프로세스들은 상태 디렉터리의 flock으로 직렬화되어
+  커밋이 유실되지 않는다. lua 게이트 자체는 락 밖에서 돌므로 병렬성이 유지된다.
+- 부모 finalize lua에서는 `gralph.progress.keys("sub")` / `gralph.progress.count("sub")`로
+  완료된 항목을 읽어 집계 검증할 수 있다.
+- 안내문 템플릿에 `{{subprogress}}`(멀티라인 현황), `{{subdone "sub"}}`, `{{subcount "sub"}}`가
+  추가로 제공되며, `gralph next`는 현황 블록을 자동으로 덧붙인다.
+- store 컨벤션: 병렬 게이트는 `gralph.store.set("evidence:" .. gralph.args.part, ...)`처럼
+  key로 네임스페이스해서 쓸 것 (커밋은 key 단위 머지라 다른 키끼리는 충돌하지 않는다).
+
+## 상태 저장 (파일 분리)
 
 - `.gralph/state.json` — **프레임워크 내부**(사용자 비접근 영역): 커서, 세션 id, 커맨드별 실패 수.
 - `.gralph/store.json` — **유저 store**(lua 전용 KV): 프레임워크는 내용을 건드리지 않는다.
   lua의 `store.set`은 커맨드 **성공 시에만** 커밋되어, 실패한 검증이 값을 남기지 않는다.
+  커밋은 이번 실행이 변경한 key만 머지하므로 병렬 워커가 서로의 값을 덮어쓰지 않는다.
+- `.gralph/progress.json` — **프레임워크 내부**: 서브커맨드 완료 항목(key별 시각·세션).
+  실패 카운터(세션 스코프)·커서(노드 스코프)와 수명이 달라 별도 파일이다. 부모 성공 시
+  progress를 먼저 비우고 커서를 전진시키는 쓰기 순서로, 중간에 죽어도 stale 쿼터가
+  재방문에 이월되지 않는다(보수적으로 재작업).
+- `.gralph/lock` — 병렬 `gralph` 프로세스 간 read-modify-write 직렬화용 flock 파일.
 
 ## lua 브리지 (`gralph` 헬퍼)
 
@@ -66,8 +113,10 @@ gralph run profile.yaml [--max-iterations N]
 gralph.args.<name>            -- YAML로 정의된 입력 인자 (문자열)
 gralph.store.get("key")       -- 유저 KV 읽기 (스칼라/중첩 테이블)
 gralph.store.set("key", val)  -- 유저 KV 쓰기 (성공 시 커밋)
-gralph.route("name")          -- 후보 여럿일 때 후속 지정
+gralph.route("name")          -- 후보 여럿일 때 후속 지정 (서브커맨드 게이트에선 금지)
 gralph.fail("reason: ...")    -- 검증 실패 표시. 미호출 시 성공
+gralph.progress.keys("sub")   -- (finalize 게이트 한정) 완료 key 배열
+gralph.progress.count("sub")  -- (finalize 게이트 한정) 완료 항목 수
 ```
 
 - `fail`의 reason은 실패 응답에 실려 같은 세션에서 무엇을 고칠지 알려준다.
@@ -118,9 +167,11 @@ go build -o example/gralph . && cd example
 | 파일 | 내용 |
 |---|---|
 | `main.go` | CLI 디스패치 (`run` / `next` / 동적 커스텀 커맨드) |
-| `config.go` | 프로파일 YAML 파싱·검증 |
-| `state.go` | 내부 상태(state.json)와 유저 store(store.json) |
-| `next.go` | `resolveNext()` + 안내문 순수 렌더링 |
-| `command.go` | 커스텀 커맨드 실행: 인자 파싱, 성공/실패/임계치, 커서 전진 |
+| `config.go` | 프로파일 YAML 파싱·검증 (서브커맨드 규칙 포함) |
+| `state.go` | 내부 상태(state.json)와 유저 store(store.json, key 단위 머지 커밋) |
+| `progress.go` | 서브커맨드 진행 상태(progress.json): 쿼터 판정, stale 무효화 |
+| `lock.go` | 상태 디렉터리 flock (병렬 워커 직렬화) |
+| `next.go` | `resolveNext()` + 안내문 순수 렌더링 (`{{subprogress}}` 등) |
+| `command.go` | 커스텀 커맨드 실행: 인자 파싱, 성공/실패/임계치, 서브커맨드 fork/join, 커서 전진 |
 | `lua.go` | gopher-lua 브리지 (`gralph` 헬퍼 객체) |
 | `loop.go` | 오케스트레이터 (랄프 반복문) |
