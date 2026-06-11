@@ -25,6 +25,11 @@ jobs:
         # windows 러너에서도 기존 스텝의 bash 문법을 그대로 쓴다.
         shell: bash
     steps:
+      - name: Disable git CRLF conversion
+        # windows 러너의 기본 autocrlf가 체크아웃 시 LF를 CRLF로 바꿔
+        # gofmt가 모든 파일을 오탐하므로, 체크아웃 전에 꺼 둔다.
+        run: git config --global core.autocrlf input
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
