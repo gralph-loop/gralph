@@ -54,7 +54,9 @@ gralph run --max-iterations N profile.yaml   # 플래그가 앞에 와도 동일
 
 - **성공** → 커서 즉시 전진, store 커밋, 응답은 항상 "세션을 종료하라".
 - **실패** → 같은 세션에서 재시도 가능. 단 매 n회째(기본 5, `fail_threshold`) 실패에는
-  세션 종료 응답을 내서 새 세션·새 컨텍스트 재실행을 강제.
+  세션 종료 응답을 내서 새 세션·새 컨텍스트 재실행을 강제. 실패 사유는 `failures.json`에
+  영속되어 새 세션의 `gralph next` 안내문 뒤에 자동으로 노출된다 — 이전 세션의 실수를
+  모른 채 반복하지 않게 한다. 해당 노드가 성공하면 기록은 삭제된다.
 - 안내된 커맨드는 세션 안에서 딱 한 번 반드시 성공해야 하며, 커서와 다른 커맨드 호출은 거부된다.
 
 ## 커서 전진과 그래프
@@ -118,6 +120,11 @@ commands:
   실패 카운터(세션 스코프)·커서(노드 스코프)와 수명이 달라 별도 파일이다. 부모 성공 시
   progress를 먼저 비우고 커서를 전진시키는 쓰기 순서로, 중간에 죽어도 stale 쿼터가
   재방문에 이월되지 않는다(보수적으로 재작업).
+- `.gralph-state/failures.json` — **프레임워크 내부**: 노드 라벨별 최근 실패 사유
+  (라벨은 커맨드 이름, 서브커맨드는 `name:key`; 라벨당 최대 3개, 누적 번호·RFC3339 시각).
+  실패 카운터(세션 스코프)와 달리 세션 회전에도 보존되며, `gralph next`가 현재 노드의
+  기록(서브커맨드 라벨 포함)을 안내문 뒤에 덧붙인다. 노드 성공 시 그 라벨의 기록이
+  삭제되고, 부모 finalize 성공 시 그 노드의 서브커맨드 기록도 전부 삭제된다.
 - `.gralph-state/lock` — 병렬 `gralph` 프로세스 간 read-modify-write 직렬화용 flock 파일.
 
 상태 디렉터리(기본 `.gralph-state/`)는 실행 중간 산출물이므로 프로젝트의 `.gitignore`에 넣기를 권장한다.
@@ -196,6 +203,7 @@ go build -o example/gralph . && cd example
 | `config.go` | 프로파일 YAML 파싱·검증 (서브커맨드 규칙 포함) |
 | `state.go` | 내부 상태(state.json)와 유저 store(store.json, key 단위 머지 커밋) |
 | `progress.go` | 서브커맨드 진행 상태(progress.json): 쿼터 판정, stale 무효화 |
+| `failures.go` | 실패 사유 기록(failures.json): 세션 간 전달, 성공 시 삭제 |
 | `lock.go` | 상태 디렉터리 flock (병렬 워커 직렬화) |
 | `next.go` | `resolveNext()` + 안내문 순수 렌더링 (`{{subprogress}}` 등) |
 | `command.go` | 커스텀 커맨드 실행: 인자 파싱, 성공/실패/임계치, 서브커맨드 fork/join, 커서 전진 |

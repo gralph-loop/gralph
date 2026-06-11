@@ -55,11 +55,21 @@ func renderNext(p *Profile) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	fail, err := LoadFailures(p.StateDir)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Current task: %s\n\n", cmd.Name)
 	b.WriteString(strings.TrimRight(body, "\n"))
 	b.WriteString("\n\n")
+	if block := formatFailureMemory(cmd, fail); block != "" {
+		// Failures recorded on this node by earlier sessions: without this a
+		// fresh session would re-attempt blind and repeat the same mistakes.
+		b.WriteString(block)
+		b.WriteString("\n")
+	}
 	if prog != nil {
 		// Always show live quota state, so a fresh session can resume
 		// without the guidance author having to remember {{subprogress}}.
@@ -74,6 +84,43 @@ func renderNext(p *Profile) (string, error) {
 	}
 	b.WriteString("If the response tells you to end the session, end it immediately.\n")
 	return b.String(), nil
+}
+
+// formatFailureMemory renders the persisted failures of every label that
+// belongs to cmd: the command's own name plus each subcommand's "name:key"
+// labels (in spec order, keys sorted). Subcommand entries carry their label
+// so the agent can tell which work item failed. Empty string when the node
+// has no recorded failures.
+func formatFailureMemory(cmd *CommandSpec, fail Failures) string {
+	type entry struct {
+		label string // "" for the node's own records
+		rec   FailureRecord
+	}
+	var entries []entry
+	for _, r := range fail[cmd.Name] {
+		entries = append(entries, entry{"", r})
+	}
+	for i := range cmd.Subcommands {
+		for _, label := range fail.LabelsWithPrefix(cmd.Subcommands[i].Name + ":") {
+			for _, r := range fail[label] {
+				entries = append(entries, entry{label, r})
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Previous attempts on this task failed:\n")
+	for _, e := range entries {
+		if e.label == "" {
+			fmt.Fprintf(&b, "- (failure %d) %s\n", e.rec.Failure, e.rec.Reason)
+		} else {
+			fmt.Fprintf(&b, "- (failure %d) [%s] %s\n", e.rec.Failure, e.label, e.rec.Reason)
+		}
+	}
+	b.WriteString("Avoid repeating the same mistakes.\n")
+	return b.String()
 }
 
 // formatSubprogress renders the multi-line quota view, e.g.

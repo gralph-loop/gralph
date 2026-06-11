@@ -194,6 +194,16 @@ func runSubcommand(p *Profile, parent *CommandSpec, sub *SubcommandSpec, argv []
 		if err := pr.Save(p.StateDir); err != nil {
 			return err
 		}
+		// This work item is done; drop its failure memory.
+		fr, err := LoadFailures(p.StateDir)
+		if err != nil {
+			return err
+		}
+		if fr.Clear(sub.Name + ":" + itemKey) {
+			if err := fr.Save(p.StateDir); err != nil {
+				return err
+			}
+		}
 		if st.Cursor == "" {
 			// First run before any resolveNext: persist the implicit cursor
 			// so on-disk state matches what just got recorded.
@@ -290,7 +300,8 @@ func resolveSuccessor(cmd *CommandSpec, outcome *LuaOutcome) string {
 
 // commitFailure increments the failure counter under the state lock and
 // builds the retry / end-session response. counterKey is the st.Failures key
-// (subcommands use "name:key"); label is what the agent sees.
+// and the failure-memory label (subcommands use "name:key"); label is what
+// the agent sees.
 func commitFailure(p *Profile, label, counterKey string, threshold int, outcome LuaOutcome) (*CommandResult, error) {
 	var res *CommandResult
 	err := withStateLock(p.StateDir, func() error {
@@ -304,6 +315,21 @@ func commitFailure(p *Profile, label, counterKey string, threshold int, outcome 
 			return err
 		}
 		// Store is intentionally NOT committed on failure.
+
+		// Persist the reason so the NEXT session's agent sees what went
+		// wrong: st.Failures resets on rotation, failures.json does not.
+		fr, err := LoadFailures(p.StateDir)
+		if err != nil {
+			return err
+		}
+		reason := outcome.FailReason
+		if outcome.ScriptErr != nil {
+			reason = outcome.ScriptErr.Error()
+		}
+		fr.Record(counterKey, reason, time.Now())
+		if err := fr.Save(p.StateDir); err != nil {
+			return err
+		}
 
 		end := count%threshold == 0
 		var b strings.Builder
@@ -371,6 +397,25 @@ func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clea
 				return nil
 			}
 			if err := ClearProgress(p.StateDir); err != nil {
+				return err
+			}
+		}
+		// A success closes the node's failure memory: the recorded reasons
+		// are advice for redoing THIS task, useless once it is done.
+		fr, err := LoadFailures(p.StateDir)
+		if err != nil {
+			return err
+		}
+		cleared := fr.Clear(cmd.Name)
+		if clearProgress {
+			for i := range cmd.Subcommands {
+				if fr.ClearPrefix(cmd.Subcommands[i].Name + ":") {
+					cleared = true
+				}
+			}
+		}
+		if cleared {
+			if err := fr.Save(p.StateDir); err != nil {
 				return err
 			}
 		}
