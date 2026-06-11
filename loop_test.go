@@ -142,6 +142,22 @@ exit 0
 			t.Fatalf("worker evidence ev:%s lost", part)
 		}
 	}
+
+	// The journal brackets the run: it opens with the first session and ends
+	// with loop_done, with every commit (3 subitems + 2 successes) in between.
+	evs := readJournal(t, p.StateDir)
+	wantEvent(t, evs[0], EvSessionStart)
+	if evs[0].Iteration != 1 || evs[0].Cursor != "build-all" || evs[0].Session == "" {
+		t.Fatalf("session_start event = %+v", evs[0])
+	}
+	wantEvent(t, evs[len(evs)-1], EvLoopDone)
+	counts := map[string]int{}
+	for _, ev := range evs {
+		counts[ev.Event]++
+	}
+	if counts[EvSubitemRecorded] != 3 || counts[EvCommandSucceeded] != 2 {
+		t.Fatalf("journal event counts = %v", counts)
+	}
 }
 
 // writeLoopProfile writes a profile YAML into a temp dir and loads it.

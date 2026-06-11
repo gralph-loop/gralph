@@ -62,6 +62,7 @@ func runLoop(ctx context.Context, p *Profile, maxIterations int) error {
 		}
 		if cursor == DoneCursor {
 			fmt.Fprintf(os.Stderr, "[gralph] cursor is DONE; loop finished after %d iteration(s)\n", i-1)
+			appendJournal(p.StateDir, JournalEvent{Event: EvLoopDone, Iteration: i - 1})
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -80,6 +81,12 @@ func runLoop(ctx context.Context, p *Profile, maxIterations int) error {
 		}
 
 		fmt.Fprintf(os.Stderr, "[gralph] iteration %d | session %s | cursor %s\n", i, st.SessionID, cursor)
+		appendJournal(p.StateDir, JournalEvent{
+			Event:     EvSessionStart,
+			Session:   st.SessionID,
+			Cursor:    cursor,
+			Iteration: i,
+		})
 
 		agentErr := launchAgent(ctx, p)
 		if ctx.Err() != nil {

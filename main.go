@@ -58,6 +58,35 @@ func main() {
 			fatal(err)
 		}
 
+	case "graph":
+		fs := flag.NewFlagSet("graph", flag.ExitOnError)
+		withState := fs.Bool("state", false, "highlight the current cursor from the state dir")
+		args := os.Args[2:]
+		// allow `gralph graph profile.yaml --state`
+		var profilePath string
+		if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+			profilePath = args[0]
+			args = args[1:]
+		}
+		_ = fs.Parse(args)
+		if profilePath == "" && fs.NArg() > 0 {
+			profilePath = fs.Arg(0)
+		}
+		if profilePath == "" {
+			fatal(fmt.Errorf("usage: gralph graph <profile.yaml> [--state]"))
+		}
+		p, err := LoadProfile(profilePath)
+		if err != nil {
+			fatal(err)
+		}
+		highlight := ""
+		if *withState {
+			if highlight, err = graphCursor(p); err != nil {
+				fatal(err)
+			}
+		}
+		fmt.Print(renderGraph(p, highlight))
+
 	case "next":
 		p, rest, err := profileFromSessionArgs(os.Args[2:])
 		if err != nil {
