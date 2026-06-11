@@ -9,6 +9,7 @@ directory**.
 ```yaml
 agent:
   command: ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"]
+  timeout: 30m                  # optional; kill the session past this (Go duration)
 prompt: |                       # optional; a sensible default is used if omitted
   You are running inside a gralph (ralph loop) session.
   1. Run "gralph next" to receive the gralph command you must eventually run.
@@ -16,6 +17,7 @@ prompt: |                       # optional; a sensible default is used if omitte
   3. Whenever a command's response says to end the session, end it immediately.
 state_dir: .gralph-state        # optional; default ".gralph-state" (relative to profile)
 fail_threshold: 5               # optional; default 5; every n-th failure recycles the session
+lua_timeout: 30s                # optional; default lua gate time limit (per-command override)
 commands:                       # required; ≥1
   - ...
 ```
@@ -23,9 +25,11 @@ commands:                       # required; ≥1
 | Field | Required | Default | Notes |
 |---|---|---|---|
 | `agent.command` | for `gralph run` | — | argv list; every element may contain `{{prompt}}`, replaced with the ralph prompt. Not needed for in-session subcommands, but required to run the loop. |
+| `agent.timeout` | no | none | Go duration string. A session exceeding it is killed (SIGTERM, then hard kill) and retried like any abnormal agent exit. |
 | `prompt` | no | built-in default | The ralph prompt handed to the agent each session. |
 | `state_dir` | no | `.gralph-state` | Where `state.json` + `store.json` live. Relative paths resolve against the profile dir. |
 | `fail_threshold` | no | `5` | Profile-wide failure threshold (per-command override available). Must be > 0. |
+| `lua_timeout` | no | none | Go duration string; aborts a gate that runs longer (SCRIPT ERROR, counts toward the threshold). Per-command override available. |
 | `commands` | yes | — | The graph nodes, in order. `commands[0]` is the entry node. |
 
 ## A command (one graph node)
@@ -42,16 +46,23 @@ commands:                       # required; ≥1
   lua: scripts/verify.lua       # path relative to profile dir; optional
   next: [fix, finish]           # successor candidates
   fail_threshold: 3             # optional per-command override
+  lua_timeout: 10s              # optional per-command gate time limit
+  agent:                        # optional per-node agent override (e.g. cheaper model)
+    command: ["claude", "-p", "{{prompt}}", "--model", "haiku"]
+  prompt: |                     # optional per-node ralph prompt override
+    ...
 ```
 
 | Field | Required | Notes |
 |---|---|---|
 | `name` | yes | Unique across the profile. `DONE` is reserved and rejected. |
 | `guidance` | recommended | Text returned by `gralph next` while the cursor is on this node. See templating below. |
-| `args` | no | Each: `name` (required), `required` (bool, default false), `desc` (doc only). The agent passes them as `--name value` or `--name=value`. |
+| `args` | no | Each: `name` (required), `required` (bool, default false), `desc` (rendered in the auto-generated usage block). The agent passes them as `--name value` or `--name=value`. |
 | `lua` | see rules | Path (relative to profile) to the validation/routing script. Optional — but **required if `next` has ≥2 entries**. Without Lua a command always succeeds. |
 | `next` | no | Successor command names. 0 → terminal (success → `DONE`); 1 → unconditional; ≥2 → Lua must `gralph.route`. Every name must be an existing command. |
 | `fail_threshold` | no | Overrides the profile threshold for this node only. |
+| `lua_timeout` | no | Overrides the profile-level `lua_timeout` for this node's gate. |
+| `agent` / `prompt` | no | Per-node overrides: while the cursor is on this node, sessions launch with this agent command / ralph prompt instead of the profile-level ones. A declared `agent` must have a non-empty `command`. |
 | `subcommands` | no | Turns the node into a fork/join with quotas. See below. |
 
 ## Subcommands (fork/join quotas)
@@ -106,13 +117,19 @@ Only two things are available:
   unset). Use it to feed forward evidence written by an earlier gate (the goal,
   a path, a count, an attempt number).
 - `{{.Cursor}}` → the current command's name.
+- `{{usage}}` → the usage block generated from the node's `args` spec (exact
+  invocation line plus an argument table built from `required`/`desc`).
 
 Nodes with `subcommands:` additionally get `{{subprogress}}` (multi-line quota
 view), `{{subdone "sub"}}` (completed keys) and `{{subcount "sub"}}`; `gralph
 next` also auto-appends a progress block so a fresh session can always resume.
 
-Always end guidance with the exact `RUN:` line the agent should execute,
-including arguments, so there's no ambiguity about what command closes the node.
+Do **not** hand-write the invocation line: `gralph next` derives a usage block
+from the `args` spec and auto-appends it when the guidance never calls
+`{{usage}}` (call it to control placement). Hand-written `RUN:` lines drift
+from the spec; the generated block cannot. `gralph next` also auto-appends any
+recorded failure reasons from earlier sessions, so the agent sees what already
+went wrong.
 
 ## Validation performed at load (`gralph run` / first subcommand)
 
@@ -127,7 +144,13 @@ The profile is rejected if any of these hold:
 - A subcommand has an empty or reserved name, or its name collides with any
   command or other subcommand (they share the CLI namespace).
 - A subcommand has `count` > 1 but no `key`, or its `key` is not a declared arg.
+- A command or subcommand name shadows a built-in CLI word: `run`, `next`,
+  `help`, `version`, `status`, `reset`, `validate`, `try`.
+- A node declares an `agent:` override with an empty `command`.
+- An unparsable or non-positive `agent.timeout` / `lua_timeout`.
 
-These are deterministic, static checks. `scripts/lint_profile.py` reproduces
-them (plus extra style/anti-pattern lints) so you can catch problems before
-building or running gralph.
+These are deterministic, static checks. `gralph validate profile.yaml` runs
+them all without starting the loop, plus lua file existence, lua compile
+checks, and graph reachability warnings. `scripts/lint_profile.py` reproduces
+the schema checks with extra style/anti-pattern lints when the binary isn't
+available.

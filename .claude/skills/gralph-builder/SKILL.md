@@ -97,7 +97,9 @@ appear in the cited file, etc. You can't check taste, but you can check that the
 agent did the looking. This both raises the floor and produces an audit trail.
 
 **`gralph.fail(reason)` is a repair instruction, not a log line.** The reason is
-shown to the agent so it can fix the problem and retry in the same session.
+shown to the agent so it can fix the problem and retry in the same session, and
+it is persisted (`failures.json`) so `gralph next` replays it to *later*
+sessions until the node succeeds — a vague reason misleads every retry.
 Write reasons that say exactly what was wrong and what to do:
 `gralph.fail("reason: report.json missing key 'coverage'; add it and resubmit")`,
 not `gralph.fail("invalid")`.
@@ -131,9 +133,12 @@ gotcha in `reference/execution-model.md`.
    above. This is the step people skip; don't.
 
 3. **Write the guidance** (`guidance:`). It is rendered by `gralph next` with
-   `text/template`; only `{{store "key"}}` and `{{.Cursor}}` are available — **no
-   Lua runs at render time.** Tell the agent what to produce and end with the
-   exact `RUN:` line, including the args. Keep it imperative and specific.
+   `text/template`; `{{store "key"}}`, `{{.Cursor}}` and `{{usage}}` are
+   available — **no Lua runs at render time.** Tell the agent what to produce;
+   do **not** hand-write the invocation line. `gralph next` generates a usage
+   block from the `args` spec (using each arg's `desc`) and auto-appends it
+   unless the guidance places `{{usage}}` itself. Keep it imperative and
+   specific.
 
 4. **Declare args** the agent must pass (`args:`), marking `required: true` where
    the gate needs them. Arg values arrive in Lua as **strings**
@@ -144,19 +149,22 @@ gotcha in `reference/execution-model.md`.
    `gralph.store.set` anything later guidance/gates need, and `gralph.route` if
    branching. On any problem `gralph.fail("reason: ...")` with a fix instruction.
 
-6. **Lint and dry-run.** Run `python3 scripts/lint_profile.py profile.yaml`
-   (static checks: schema, dangling successors, missing Lua files, ≥2 successors
-   without Lua, self-attestation smells). Then get the `gralph` binary (see
-   "Getting gralph" below) and run the loop
-   against a fake agent with `--max-iterations` to confirm the graph traverses
-   and routes as intended (see "Testing" below).
+6. **Lint and dry-run.** With the `gralph` binary (see "Getting gralph"
+   below): `gralph validate profile.yaml` (all loader checks + lua
+   existence/compile + graph reachability warnings) and `gralph try <cmd>
+   --arg v` to exercise a single gate without committing any state. Without
+   the binary, `python3 scripts/lint_profile.py profile.yaml` reproduces the
+   schema checks plus self-attestation smells. Then run the loop against a
+   fake agent with `--max-iterations` to confirm the graph traverses and
+   routes as intended (see "Testing" below).
 
 ## Validation rules gralph enforces (don't trip them)
 
 The profile loader rejects, at load time: zero commands; a command with no
-name; the reserved name `DONE`; duplicate command names; a `next:` entry naming
-an unknown command; and **a command with >1 successor but no `lua:`** (nothing
-could route it). For subcommands it additionally rejects: a name colliding with
+name; the reserved name `DONE` or any built-in CLI word (`run`, `next`, `help`,
+`version`, `status`, `reset`, `validate`, `try`); duplicate command names; a
+`next:` entry naming an unknown command; and **a command with >1 successor but
+no `lua:`** (nothing could route it). For subcommands it additionally rejects: a name colliding with
 any command or other subcommand (shared CLI namespace); `count` > 1 with no
 `key:`; a `key:` that is not a declared arg. A Lua `error()` (or bridge misuse)
 is reported as a SCRIPT ERROR and still counts toward the failure threshold —

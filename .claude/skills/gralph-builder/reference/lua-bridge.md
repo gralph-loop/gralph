@@ -11,6 +11,7 @@ agent's args and the user store exposed through the global `gralph` table.
 
 | Call | Returns / effect |
 |---|---|
+| `gralph.profile_dir` | Absolute path of the profile's directory (string). Join file paths onto it instead of trusting the cwd. |
 | `gralph.args.<name>` | The arg's value as a **string** (declared args only). Use `tonumber()` for numbers. Absent → `nil`. |
 | `gralph.store.get("key")` | The stored value (scalar, or nested table for JSON arrays/objects). `nil` if unset. |
 | `gralph.store.set("key", v)` | Write to the user store. **Committed only if the command succeeds.** Accepts scalars and (nested) tables. |
@@ -31,7 +32,8 @@ this run wrote. Namespace store writes by the work-item key
 - **Validation failure**: `gralph.fail(reason)` was called. Reported as
   `FAILED ... reason`. Counts toward the threshold. Store not committed.
 - **Script error**: Lua `error()` or a bridge misuse (e.g. `route` to a
-  non-candidate, finishing with ≥2 successors but no `route`). Reported as
+  non-candidate, finishing with ≥2 successors but no `route`), or the gate
+  exceeding a configured `lua_timeout`. Reported as
   `SCRIPT ERROR`. Also counts toward the threshold. Prefer `gralph.fail` for
   *expected* validation problems; let `error()` surface genuine bugs.
 
@@ -113,8 +115,9 @@ gralph.store.set("report_path", gralph.args.report)
 A custom command runs in whatever directory the agent invoked it from; the
 orchestrator launches the agent with cwd = the profile's directory. Relative
 paths in `os.execute`/`io.open` therefore resolve against that dir unless the
-agent changed directory. To be robust, have the agent submit paths as args and
-validate them, or anchor commands to a known root, rather than assuming cwd.
+agent changed directory. To be robust, anchor paths to `gralph.profile_dir`
+(e.g. `io.open(gralph.profile_dir .. "/report.json")`) instead of assuming cwd,
+and validate any agent-submitted path args.
 
 ## JSON parsing
 
