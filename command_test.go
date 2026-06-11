@@ -569,6 +569,112 @@ func TestNextRendersSubprogress(t *testing.T) {
 	}
 }
 
+func TestUsageRequiredOptionalAndDesc(t *testing.T) {
+	p := writeProfile(t, `commands:
+  - name: implement
+    guidance: Do the work.
+    args:
+      - name: report
+        required: true
+        desc: Path to the work report file
+      - name: dry-run
+`, nil)
+
+	out, err := renderNext(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Command to run when done:",
+		"  gralph implement --report <value> [--dry-run <value>]", // optional bracketed
+		"Arguments:",
+		"  --report   (required)  Path to the work report file", // Desc shown
+		"  --dry-run  (optional)",                               // no Desc -> omitted
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("renderNext output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestUsageNoArgs(t *testing.T) {
+	p := writeProfile(t, `commands:
+  - name: fix
+    guidance: Fix it.
+`, nil)
+
+	out, err := renderNext(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Command to run when done:\n  gralph fix\n") {
+		t.Fatalf("renderNext output missing bare usage:\n%s", out)
+	}
+	if strings.Contains(out, "Arguments:") {
+		t.Fatalf("no-arg command must not render an Arguments section:\n%s", out)
+	}
+}
+
+func TestUsagePlacementSkipsAutoAppend(t *testing.T) {
+	p := writeProfile(t, `commands:
+  - name: implement
+    guidance: "before\n{{usage}}\nafter"
+    args:
+      - name: report
+        required: true
+`, nil)
+
+	out, err := renderNext(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// {{usage}} placed the block where the author chose...
+	idx := strings.Index(out, "Command to run when done:")
+	if idx < 0 || idx > strings.Index(out, "after") {
+		t.Fatalf("usage block not rendered at the {{usage}} position:\n%s", out)
+	}
+	// ...so it must not be appended a second time.
+	if strings.Count(out, "Command to run when done:") != 1 {
+		t.Fatalf("usage block must appear exactly once:\n%s", out)
+	}
+}
+
+func TestUsageCoversSubcommands(t *testing.T) {
+	p := writeProfile(t, `commands:
+  - name: parent
+    guidance: fan out
+    subcommands:
+      - name: sub-a
+        count: 2
+        key: item
+        args:
+          - name: item
+            desc: work-item key
+      - name: sub-b
+    next: [wrap]
+  - name: wrap
+`, nil)
+
+	out, err := renderNext(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Subcommand to run per work item:",
+		"  gralph sub-a --item <value>", // key arg forced required
+		"  (run once per distinct --item, 2 items total)",
+		"  --item  (required)  work-item key",
+		"  gralph sub-b",
+		"  (run once)",
+		"Command to run when every quota is met:",
+		"  gralph parent",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("renderNext output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // Plain single-success nodes must behave exactly as before.
 func TestPlainCommandUnchanged(t *testing.T) {
 	p := writeProfile(t, `fail_threshold: 2

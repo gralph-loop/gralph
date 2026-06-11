@@ -28,12 +28,15 @@ commands:
     next: [implement]
 
   - name: implement
+    # No RUN: line and no {{usage}} here -- `gralph next` auto-appends the
+    # usage block generated from the args spec after the guidance.
     guidance: |
-      Implement the goal "{{store "goal"}}". Produce a work report file.
-      RUN: ./gralph implement --report report.txt
+      Implement the goal "{{store "goal"}}". Produce a work report file
+      at report.txt and submit its path as --report.
     args:
       - name: report
         required: true
+        desc: path to the work report file
     lua: scripts/implement.lua
     next: [verify]
 
@@ -49,9 +52,11 @@ commands:
     next: [fix, finish]
 
   - name: fix
+    # {{usage}} places the generated usage block exactly here, so nothing is
+    # auto-appended after the guidance.
     guidance: |
       Fix the problems found during verification of "{{store "goal"}}".
-      RUN: ./gralph fix
+      {{usage}}
     lua: scripts/fix.lua
     next: [verify]
 

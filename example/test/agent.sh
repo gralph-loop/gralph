@@ -7,18 +7,26 @@
 #   4. obey "End the session" responses; otherwise fix & retry in-session
 set -u
 PROMPT="${1:-}"
-PATH="$PATH:$(cd "$(dirname "$0")/../.." && pwd)/dist"
+# The example binary lives next to the profile (built by `go build -o
+# example/gralph .`); fall back to the repo's dist/.
+PATH="$PATH:$(cd "$(dirname "$0")/.." && pwd):$(cd "$(dirname "$0")/../.." && pwd)/dist"
 
 echo "----- agent session start -----"
 guidance="$(gralph next)" || { echo "agent: next failed"; exit 1; }
 echo "$guidance" | sed 's/^/  [next] /'
 
 cmdline="$(echo "$guidance" | grep '^RUN:' | head -1 | sed 's/^RUN: //')"
-if [ -z "$cmdline" ]; then echo "agent: no RUN line"; exit 1; fi
+if [ -z "$cmdline" ]; then
+  # No hand-written RUN: line -- take the generated usage line right below
+  # "Command to run when done:" ({{usage}} or the auto-appended block).
+  cmdline="$(echo "$guidance" | grep -A1 '^Command to run when done:' | tail -1 | sed 's/^ *//')"
+fi
+if [ -z "$cmdline" ]; then echo "agent: no runnable command line"; exit 1; fi
 
 # Simulated non-deterministic work: pick a goal / write a report etc.
 cmdline="${cmdline//<your-goal>/demo}"
 cmdline="${cmdline//<one line>/\"all done nicely\"}"
+cmdline="${cmdline//<value>/report.txt}"
 
 run_once() {
   echo "  [agent] running: $cmdline"
