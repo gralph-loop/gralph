@@ -6,7 +6,8 @@ description: >-
   request to create, edit, or review a gralph profile.yaml, gralph Lua
   validation/routing scripts, a gralph command graph, or a ralph-loop agent
   workflow; mentions of `gralph next`, `gralph run`, gralph.fail/route/store,
-  or ".gralph-state". The skill's central job is to turn loosely specified
+  gralph subcommands / fork-join quotas / parallel sub-agent workers, or
+  ".gralph-state". The skill's central job is to turn loosely specified
   agent work into a graph of deterministically-verified steps, so the loop only
   advances on machine-checkable evidence rather than the agent's self-report.
   Do NOT use for unrelated Go/Lua coding or for non-gralph agent frameworks.
@@ -34,6 +35,14 @@ checks the work. On success the cursor advances to the next graph node and the
 session is told to end; on failure the agent retries *in the same session*,
 until an n-th failure forces a fresh session. When the cursor reaches `DONE`
 the orchestrator stops looping. The agent never sees the loop's stop signal.
+
+One extension to "succeed once, then advance": a node may declare
+`subcommands:` with quotas, turning it into a **fork/join** — each subcommand
+must succeed once per distinct work-item key, `count` times in total, before
+the node itself runs as the finalize gate (aggregate verification + routing)
+and advances. Parallel sub-agents can run subcommands concurrently; gralph
+serializes their commits with a state-dir lock and tracks completed keys in
+`progress.json` across sessions.
 
 The split that matters: **the agent is non-deterministic; the Lua gate is
 deterministic.** The whole value of the framework is that progress is fenced by
@@ -108,7 +117,13 @@ gotcha in `reference/execution-model.md`.
 1. **Map the work to a graph.** List the steps. Each step that needs a
    correctness fence is a command (node). Draw the edges (`next:`). Decide which
    nodes branch (≥2 successors → needs routing Lua) and which terminate (0
-   successors → success sets cursor `DONE`).
+   successors → success sets cursor `DONE`). If a step is really "do X for each
+   of N items" — especially if the items are independent enough to parallelize
+   across sub-agents — model it as one node with `subcommands:` quotas (recipe 7
+   in `patterns/deterministic-gates.md`), not as N copies of a node or a
+   self-cycle with a counter. Pick a `key:` that names the work item; the
+   per-item gate verifies that item's artifact, the parent's finalize gate
+   verifies the aggregate and routes.
 
 2. **For each node, name the deterministic evidence.** Before writing guidance,
    answer: *what artifact proves this step is done, and what mechanical check
@@ -141,10 +156,14 @@ gotcha in `reference/execution-model.md`.
 The profile loader rejects, at load time: zero commands; a command with no
 name; the reserved name `DONE`; duplicate command names; a `next:` entry naming
 an unknown command; and **a command with >1 successor but no `lua:`** (nothing
-could route it). A Lua `error()` (or bridge misuse) is reported as a SCRIPT
-ERROR and still counts toward the failure threshold. Calling a command other
+could route it). For subcommands it additionally rejects: a name colliding with
+any command or other subcommand (shared CLI namespace); `count` > 1 with no
+`key:`; a `key:` that is not a declared arg. A Lua `error()` (or bridge misuse)
+is reported as a SCRIPT ERROR and still counts toward the failure threshold —
+including `gralph.route` called from a subcommand gate. Calling a command other
 than the current cursor is rejected without consuming the failure budget, as are
-argument-shape mistakes (unknown/missing args).
+argument-shape mistakes (unknown/missing args), duplicate work-item keys, and
+running a quota-bearing parent before its quotas are met.
 
 Full field-by-field schema: `reference/profile-yaml.md`.
 
@@ -194,8 +213,11 @@ cursor X`) to confirm the path and routing.
 - `reference/lua-bridge.md` — the `gralph.*` API, value conversion, and the
   **empirically verified** `os.execute`/`io.popen`/`io.open` idioms.
 - `patterns/deterministic-gates.md` — copy-paste gate recipes (run-the-checker,
-  parse-the-report, captured-output assertion, structured evidence, routing).
+  parse-the-report, captured-output assertion, structured evidence, routing,
+  fork/join quotas).
 - `examples/tdd-loop/` — a coding loop whose gates *run the build and tests*.
 - `examples/release-notes/` — a non-coding loop (research → draft → validate)
   showing structured-evidence gates for "soft" work.
+- The upstream repo's `example/subcommands/` — a runnable fork/join workflow
+  with a fake agent that spawns real parallel workers.
 - `scripts/lint_profile.py` — deterministic profile linter.
