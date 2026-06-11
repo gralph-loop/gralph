@@ -88,14 +88,17 @@ func runLoop(ctx context.Context, p *Profile, maxIterations int) error {
 			Iteration: i,
 		})
 
-		agentErr := launchAgent(ctx, p)
+		// Per-node overrides: the cursor's command may carry its own agent
+		// command and/or ralph prompt; otherwise the profile-level ones apply.
+		node := p.Command(cursor)
+		agentErr := launchAgent(ctx, p, p.AgentCommandFor(node), p.PromptFor(node))
 		if ctx.Err() != nil {
 			return interrupted(i, cursor)
 		}
 		if agentErr != nil {
 			// Launching the binary itself is impossible: retrying cannot help.
 			if errors.Is(agentErr, exec.ErrNotFound) || errors.Is(agentErr, fs.ErrNotExist) {
-				return fmt.Errorf("agent command %q cannot be started: %w", p.Agent.Command[0], agentErr)
+				return fmt.Errorf("agent command %q cannot be started: %w", p.AgentCommandFor(node)[0], agentErr)
 			}
 			// Otherwise an agent process dying is not a graph failure; report
 			// and keep looping (the cursor did not move, so the work will be
@@ -150,18 +153,19 @@ func agentBackoff(n int) time.Duration {
 	return d
 }
 
-// launchAgent runs one agent session. ctx cancellation (signal) and the
+// launchAgent runs one agent session with the given argv (each element may
+// contain {{prompt}}) and ralph prompt. ctx cancellation (signal) and the
 // optional agent.timeout both terminate the process: SIGTERM first, then a
 // hard kill after agentKillGrace.
-func launchAgent(ctx context.Context, p *Profile) error {
+func launchAgent(ctx context.Context, p *Profile, command []string, prompt string) error {
 	if t := p.Agent.timeout; t > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, t)
 		defer cancel()
 	}
-	argv := make([]string, len(p.Agent.Command))
-	for i, a := range p.Agent.Command {
-		argv[i] = strings.ReplaceAll(a, "{{prompt}}", p.Prompt)
+	argv := make([]string, len(command))
+	for i, a := range command {
+		argv[i] = strings.ReplaceAll(a, "{{prompt}}", prompt)
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = p.Dir
