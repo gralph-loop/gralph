@@ -100,7 +100,7 @@ func runPlainCommand(p *Profile, cmd *CommandSpec, argv []string) (*CommandResul
 	if outcome.Failed || outcome.ScriptErr != nil {
 		return commitFailure(p, cmd.Name, cmd.Name, p.ThresholdFor(cmd), outcome)
 	}
-	return commitSuccess(p, cmd, next, store, false)
+	return commitSuccess(p, cmd, next, store, false, 0)
 }
 
 // runSubcommand validates one work item of a parent's quota and records it in
@@ -227,7 +227,9 @@ func runParentFinalize(p *Profile, cmd *CommandSpec, argv []string) (*CommandRes
 	}
 
 	// Sequencing error, like running the wrong command: no budget consumed.
-	// Quotas are monotonic, so no re-check is needed at commit time.
+	// Quotas are monotonic, so they cannot become unmet at commit time -- but
+	// the commit still re-checks for items recorded AFTER this load (see
+	// seenDone below).
 	pr, err := LoadProgress(p.StateDir, cmd.Name)
 	if err != nil {
 		return nil, err
@@ -240,6 +242,11 @@ func runParentFinalize(p *Profile, cmd *CommandSpec, argv []string) (*CommandRes
 			ExitCode: 1,
 		}, nil
 	}
+	// Snapshot how many work items this finalize run gets to validate. A
+	// straggler worker may commit another key while the lua runs outside the
+	// lock; that worker was told "OK: recorded", so the commit must not
+	// silently clear a record this run never saw.
+	seenDone := pr.TotalDone()
 
 	store, err := LoadStore(p.StateDir)
 	if err != nil {
@@ -256,7 +263,7 @@ func runParentFinalize(p *Profile, cmd *CommandSpec, argv []string) (*CommandRes
 	if outcome.Failed || outcome.ScriptErr != nil {
 		return commitFailure(p, cmd.Name, cmd.Name, p.ThresholdFor(cmd), outcome)
 	}
-	return commitSuccess(p, cmd, next, store, true)
+	return commitSuccess(p, cmd, next, store, true, seenDone)
 }
 
 // resolveSuccessor decides the next cursor on (tentative) success, turning a
@@ -321,7 +328,15 @@ func commitFailure(p *Profile, label, counterKey string, threshold int, outcome 
 // progress file BEFORE advancing the cursor, so a crash in between leaves
 // the cursor on the parent with empty progress -- the sub work is redone,
 // but a stale quota can never carry over into a later revisit of the node.
-func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clearProgress bool) (*CommandResult, error) {
+//
+// seenDone is meaningful only with clearProgress: the total number of work
+// items the finalize's lua run got to see. If a straggler worker recorded
+// more items while the lua ran outside the lock, clearing now would silently
+// discard work that was acknowledged with "OK: recorded" -- so the commit is
+// refused (no budget consumed) and the agent re-runs the finalize. Quotas
+// are monotonic, so the re-run passes the quota check and the lua simply
+// validates the now-complete progress.
+func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clearProgress bool, seenDone int) (*CommandResult, error) {
 	var res *CommandResult
 	err := withStateLock(p.StateDir, func() error {
 		st, err := LoadState(p.StateDir)
@@ -342,6 +357,19 @@ func commitSuccess(p *Profile, cmd *CommandSpec, next string, store *Store, clea
 			return nil
 		}
 		if clearProgress {
+			pr, err := LoadProgress(p.StateDir, cmd.Name)
+			if err != nil {
+				return err
+			}
+			if got := pr.TotalDone(); got > seenDone {
+				res = &CommandResult{
+					Message: fmt.Sprintf(
+						"`%s` was not committed: new work items were recorded while it ran (validated %d, progress now has %d). Run `%s` again so it validates the latest progress.",
+						cmd.Name, seenDone, got, cmd.Name),
+					ExitCode: 1,
+				}
+				return nil
+			}
 			if err := ClearProgress(p.StateDir); err != nil {
 				return err
 			}

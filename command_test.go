@@ -360,6 +360,94 @@ gralph.route("b")
 	}
 }
 
+// A straggler worker that commits a new key between the finalize's progress
+// load and its locked commit must not have its record silently cleared: the
+// commit is refused, and the re-run finalize sees the straggler.
+func TestFinalizeRejectsStragglerCommit(t *testing.T) {
+	p := writeProfile(t, `commands:
+  - name: parent
+    subcommands:
+      - name: work
+        count: 1
+        key: k
+        args:
+          - name: k
+    lua: fin.lua
+    next: [wrap]
+  - name: wrap
+`, map[string]string{
+		// Records how many items this finalize run saw, so the test can prove
+		// the re-run validated the straggler too.
+		"fin.lua": `gralph.store.set("validated", tostring(gralph.progress.count("work")))`,
+	})
+
+	// Meet the quota, then snapshot what a finalize starting now would read
+	// (= the progress its lua run gets to see).
+	run(t, p, "work", "--k", "k1")
+	pr, err := LoadProgress(p.StateDir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := pr.TotalDone()
+
+	// Simulate the race: while the (conceptual) finalize lua is still
+	// running outside the lock, a parallel worker commits a fresh key and is
+	// told "OK: recorded".
+	res := run(t, p, "work", "--k", "straggler")
+	wantContains(t, res, "OK: `work` (straggler) recorded")
+
+	// The finalize commit, carrying the stale snapshot, must be refused
+	// without ending the session or consuming the failure budget.
+	store, err := LoadStore(p.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = commitSuccess(p, p.Command("parent"), "wrap", store, true, seen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 1 || res.EndSession {
+		t.Fatalf("stale finalize must be a keep-session rejection, got %+v", res)
+	}
+	wantContains(t, res, "new work items were recorded while it ran")
+	wantContains(t, res, "Run `parent` again")
+	if len(failuresOf(t, p)) != 0 {
+		t.Fatal("stale finalize rejection must not consume the failure budget")
+	}
+	if got := cursorOf(t, p); got != "parent" {
+		t.Fatalf("cursor = %q, want parent (no advance on rejection)", got)
+	}
+	pr, err = LoadProgress(p.StateDir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.CountDone("work") != 2 {
+		t.Fatal("the straggler's record must survive the rejected finalize")
+	}
+
+	// Re-run: quotas are monotonic so the gate passes, the lua now sees the
+	// straggler, and the commit goes through.
+	res = run(t, p, "parent")
+	wantContains(t, res, "OK: `parent` succeeded")
+	if got := cursorOf(t, p); got != "wrap" {
+		t.Fatalf("cursor = %q, want wrap", got)
+	}
+	store, err = LoadStore(p.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := store.Get("validated"); v != "2" {
+		t.Fatalf("re-run finalize validated %v items, want 2 (straggler visible to lua)", v)
+	}
+	pr, err = LoadProgress(p.StateDir, "parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.TotalDone() != 0 {
+		t.Fatal("progress must be cleared after the successful re-run")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency: parallel sub-agents are the feature's reason to exist.
 // ---------------------------------------------------------------------------

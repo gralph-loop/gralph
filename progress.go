@@ -79,6 +79,18 @@ func ClearProgress(dir string) error {
 // CountDone is the number of distinct completed keys for one subcommand.
 func (pr *Progress) CountDone(sub string) int { return len(pr.Done[sub]) }
 
+// TotalDone is the number of completed work items across all subcommands.
+// Recorded items are never removed within a visit, so this is monotonic; the
+// parent finalize uses it to detect stragglers that committed while its lua
+// ran outside the lock.
+func (pr *Progress) TotalDone() int {
+	total := 0
+	for _, keys := range pr.Done {
+		total += len(keys)
+	}
+	return total
+}
+
 // DoneKeys lists the completed keys for one subcommand, sorted.
 func (pr *Progress) DoneKeys(sub string) []string {
 	keys := make([]string, 0, len(pr.Done[sub]))

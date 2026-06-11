@@ -123,8 +123,24 @@ func atomicWriteJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
+	// Write + fsync + rename: the rename only publishes the file after its
+	// contents are durably on disk, so a power cut never leaves an empty or
+	// truncated state file behind. Writes are infrequent (once per command
+	// outcome), so the extra fsync costs nothing in practice.
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	for i := 0; ; i++ {
