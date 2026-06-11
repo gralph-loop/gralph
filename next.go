@@ -44,7 +44,14 @@ func renderNext(p *Profile) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	body, err := renderGuidance(cmd, store)
+	var prog *Progress
+	if len(cmd.Subcommands) > 0 {
+		prog, err = LoadProgress(p.StateDir, cmd.Name)
+		if err != nil {
+			return "", err
+		}
+	}
+	body, err := renderGuidance(cmd, store, prog)
 	if err != nil {
 		return "", err
 	}
@@ -53,12 +60,40 @@ func renderNext(p *Profile) (string, error) {
 	fmt.Fprintf(&b, "## Current task: %s\n\n", cmd.Name)
 	b.WriteString(strings.TrimRight(body, "\n"))
 	b.WriteString("\n\n")
-	b.WriteString("When the task is done, run the command above exactly once and follow its response. ")
+	if prog != nil {
+		// Always show live quota state, so a fresh session can resume
+		// without the guidance author having to remember {{subprogress}}.
+		b.WriteString("Subcommand progress:\n")
+		b.WriteString(formatSubprogress(cmd, prog))
+		b.WriteString("\n")
+		b.WriteString("This task has subcommand quotas. Run each subcommand exactly once per distinct work item ")
+		b.WriteString("(spawn parallel sub-agents for them if your environment supports it). ")
+		b.WriteString("When every quota is met, run the command above exactly once and follow its response. ")
+	} else {
+		b.WriteString("When the task is done, run the command above exactly once and follow its response. ")
+	}
 	b.WriteString("If the response tells you to end the session, end it immediately.\n")
 	return b.String(), nil
 }
 
-func renderGuidance(cmd *CommandSpec, store *Store) (string, error) {
+// formatSubprogress renders the multi-line quota view, e.g.
+//
+//	impl-feature: 3/5 done (auth, billing, search)
+//	write-doc: 0/3 done
+func formatSubprogress(cmd *CommandSpec, prog *Progress) string {
+	var b strings.Builder
+	for i := range cmd.Subcommands {
+		s := &cmd.Subcommands[i]
+		fmt.Fprintf(&b, "%s: %d/%d done", s.Name, prog.CountDone(s.Name), s.Count)
+		if keys := prog.DoneKeys(s.Name); len(keys) > 0 {
+			fmt.Fprintf(&b, " (%s)", strings.Join(keys, ", "))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func renderGuidance(cmd *CommandSpec, store *Store, prog *Progress) (string, error) {
 	funcs := template.FuncMap{
 		// {{store "key"}} -> value from the user store ("" if absent)
 		"store": func(key string) any {
@@ -68,6 +103,13 @@ func renderGuidance(cmd *CommandSpec, store *Store) (string, error) {
 			}
 			return v
 		},
+	}
+	if prog != nil {
+		// {{subprogress}} -> the same multi-line quota view shown after the
+		// guidance; {{subdone "sub"}} / {{subcount "sub"}} for finer templates.
+		funcs["subprogress"] = func() string { return strings.TrimRight(formatSubprogress(cmd, prog), "\n") }
+		funcs["subdone"] = func(sub string) []string { return prog.DoneKeys(sub) }
+		funcs["subcount"] = func(sub string) int { return prog.CountDone(sub) }
 	}
 	tpl, err := template.New(cmd.Name).Funcs(funcs).Parse(cmd.Guidance)
 	if err != nil {

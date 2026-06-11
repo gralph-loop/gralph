@@ -1,0 +1,50 @@
+# gralph subcommand (fork/join) example
+# Graph: build-all [make-part x3 || write-doc x1] -> wrap
+#
+# build-all is a fork/join node: while the cursor sits on it, the agent (or
+# its parallel sub-agents) must succeed `make-part` for 3 distinct keys and
+# `write-doc` once. Only then does `gralph build-all` itself run, as the
+# finalize gate that verifies the aggregate and advances the cursor.
+
+agent:
+  # The fake agent spawns one background worker per remaining item, mimicking
+  # an agent with parallel sub-agent support.
+  command: ["bash", "test/agent.sh", "{{prompt}}"]
+
+state_dir: .gralph-state
+fail_threshold: 5
+
+commands:
+  - name: build-all
+    guidance: |
+      Build the project parts in parallel.
+      {{subprogress}}
+      For each remaining part p: create out/<p>.txt with non-empty content,
+      then verify that one item with:
+      RUN: ./gralph make-part --part <p>
+      For the doc: create out/manual.md, then verify it with:
+      RUN: ./gralph write-doc
+      When every quota is met, finalize the node with:
+      RUN: ./gralph build-all
+    subcommands:
+      - name: make-part
+        count: 3
+        key: part
+        args:
+          - name: part
+            required: true
+            desc: "work-item key; out/<part>.txt must exist"
+        lua: scripts/part.lua
+        fail_threshold: 3
+      - name: write-doc
+        args:
+          - name: doc
+            desc: "doc path (default out/manual.md)"
+        lua: scripts/doc.lua
+    lua: scripts/finalize.lua
+    next: [wrap]
+
+  - name: wrap
+    guidance: |
+      Everything is built ({{store "parts_csv"}}). Close out the run.
+      RUN: ./gralph wrap

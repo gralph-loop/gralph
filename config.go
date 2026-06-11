@@ -22,6 +22,30 @@ type ArgSpec struct {
 	Desc     string `yaml:"desc"`
 }
 
+// SubcommandSpec is one quota item of a parent command. While the cursor is
+// on the parent, the agent (or its parallel sub-agents) must succeed this
+// subcommand once per distinct work-item key, Count times in total, before
+// the parent command itself becomes runnable.
+type SubcommandSpec struct {
+	Name string `yaml:"name"`
+	// Count is the quota: how many distinct keys must succeed (default 1).
+	Count int `yaml:"count"`
+	// Key names the arg that identifies the work item. Required when
+	// Count > 1; the named arg is forced to required. Without a key
+	// (Count == 1) the subcommand name itself is the single item key.
+	Key string `yaml:"key"`
+	// Args the agent must provide when invoking this subcommand.
+	Args []ArgSpec `yaml:"args"`
+	// Lua is the per-item validation script (relative to the profile file).
+	// Optional; without it any invocation with a fresh key succeeds.
+	// gralph.route is not available in subcommand scripts.
+	Lua string `yaml:"lua"`
+	// FailThreshold overrides the parent's effective threshold. Failures are
+	// counted per (subcommand, key) so one stuck worker does not recycle the
+	// others.
+	FailThreshold int `yaml:"fail_threshold"`
+}
+
 // CommandSpec is one node of the graph.
 type CommandSpec struct {
 	Name string `yaml:"name"`
@@ -41,6 +65,9 @@ type CommandSpec struct {
 	Next []string `yaml:"next"`
 	// FailThreshold overrides the profile-level threshold for this command.
 	FailThreshold int `yaml:"fail_threshold"`
+	// Subcommands turn this node into a fork/join: every subcommand quota
+	// must be met before this command itself may run (as the finalize gate).
+	Subcommands []SubcommandSpec `yaml:"subcommands"`
 }
 
 // AgentSpec describes how to launch one non-interactive agent session.
@@ -122,6 +149,47 @@ func (p *Profile) validate() error {
 		}
 		byName[c.Name] = c
 	}
+	// Subcommand names share the CLI namespace with commands, so they must be
+	// globally unique across both.
+	seenSub := map[string]string{} // sub name -> parent name
+	for i := range p.Commands {
+		c := &p.Commands[i]
+		for j := range c.Subcommands {
+			s := &c.Subcommands[j]
+			if s.Name == "" {
+				return fmt.Errorf("profile: command %q subcommand #%d has no name", c.Name, j+1)
+			}
+			if s.Name == DoneCursor {
+				return fmt.Errorf("profile: %q is a reserved command name", DoneCursor)
+			}
+			if _, clash := byName[s.Name]; clash {
+				return fmt.Errorf("profile: subcommand %q of %q clashes with a command name", s.Name, c.Name)
+			}
+			if parent, dup := seenSub[s.Name]; dup {
+				return fmt.Errorf("profile: duplicate subcommand name %q (in %q and %q)", s.Name, parent, c.Name)
+			}
+			seenSub[s.Name] = c.Name
+			if s.Count <= 0 {
+				s.Count = 1
+			}
+			if s.Count > 1 && s.Key == "" {
+				return fmt.Errorf("profile: subcommand %q of %q has count %d but no key to distinguish work items", s.Name, c.Name, s.Count)
+			}
+			if s.Key != "" {
+				found := false
+				for k := range s.Args {
+					if s.Args[k].Name == s.Key {
+						s.Args[k].Required = true // the key always identifies the item
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("profile: subcommand %q of %q: key %q is not a declared arg", s.Name, c.Name, s.Key)
+				}
+			}
+		}
+	}
 	for i := range p.Commands {
 		c := &p.Commands[i]
 		for _, n := range c.Next {
@@ -146,6 +214,19 @@ func (p *Profile) Command(name string) *CommandSpec {
 	return nil
 }
 
+// Subcommand returns the spec for name plus its parent command, or nils.
+func (p *Profile) Subcommand(name string) (*SubcommandSpec, *CommandSpec) {
+	for i := range p.Commands {
+		c := &p.Commands[i]
+		for j := range c.Subcommands {
+			if c.Subcommands[j].Name == name {
+				return &c.Subcommands[j], c
+			}
+		}
+	}
+	return nil, nil
+}
+
 // FirstCommand is the entry node of the graph.
 func (p *Profile) FirstCommand() *CommandSpec { return &p.Commands[0] }
 
@@ -157,13 +238,27 @@ func (p *Profile) ThresholdFor(c *CommandSpec) int {
 	return p.FailThreshold
 }
 
+// ThresholdForSub resolves the effective fail threshold for a subcommand:
+// its own override, else the parent's effective threshold.
+func (p *Profile) ThresholdForSub(parent *CommandSpec, s *SubcommandSpec) int {
+	if s.FailThreshold > 0 {
+		return s.FailThreshold
+	}
+	return p.ThresholdFor(parent)
+}
+
 // LuaPath resolves a command's lua script relative to the profile dir.
-func (p *Profile) LuaPath(c *CommandSpec) string {
-	if c.Lua == "" {
+func (p *Profile) LuaPath(c *CommandSpec) string { return p.resolvePath(c.Lua) }
+
+// SubLuaPath resolves a subcommand's lua script relative to the profile dir.
+func (p *Profile) SubLuaPath(s *SubcommandSpec) string { return p.resolvePath(s.Lua) }
+
+func (p *Profile) resolvePath(rel string) string {
+	if rel == "" {
 		return ""
 	}
-	if filepath.IsAbs(c.Lua) {
-		return c.Lua
+	if filepath.IsAbs(rel) {
+		return rel
 	}
-	return filepath.Join(p.Dir, c.Lua)
+	return filepath.Join(p.Dir, rel)
 }

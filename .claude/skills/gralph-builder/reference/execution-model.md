@@ -62,6 +62,32 @@ When the agent runs `gralph <name> --args...`:
 Key consequence: a command must succeed **exactly once** per visit, and only the
 cursor command may run. The agent can't skip ahead or run a different node.
 
+## Subcommands (fork/join quotas)
+
+A node with `subcommands:` relaxes "exactly once" into a quota join. While the
+cursor is on the parent:
+
+- Each subcommand may run any number of times, but a success is recorded only
+  for a **fresh work-item key** (the arg named by `key:`). Quota = `count`
+  distinct keys per subcommand.
+- A duplicate key, or running the parent before all quotas are met, is rejected
+  like a wrong-command call: exit 1, **no failure budget consumed**.
+- Once every quota is met, the parent itself runs as the finalize gate (its Lua
+  sees `gralph.progress.*`); parent success clears the progress and advances
+  the cursor as usual.
+- Subcommand failures are budgeted per `(subcommand, key)`, so one stuck
+  parallel worker doesn't recycle its siblings. Subcommand successes still end
+  "the session" — for a parallel sub-agent that's just the worker ending.
+- Recorded items live in **`progress.json`** (framework-owned, like
+  `state.json`): they persist across session rotation (unlike failure counters)
+  and reset only on parent success — so a cycle that revisits the node restarts
+  its quotas, and a serial agent can resume one-item-per-session.
+- Concurrency: parallel `gralph <subcommand>` processes serialize their
+  read-modify-write commits via a flock on `<state_dir>/lock`. Gates run
+  outside the lock, so slow verification stays parallel; the duplicate-key
+  check is re-done at commit time, so racing workers on the same key produce
+  exactly one recorded success.
+
 ## Cursor advancement (the `next:` list)
 
 | `next:` candidates | behavior on success |
@@ -96,7 +122,14 @@ Under `state_dir` (default `.gralph-state`, resolved relative to the profile):
   Lua; the framework owns it.
 - **`store.json`** — the user KV store, **Lua-only**. `gralph.store.get/set`
   read/write it. The framework never interprets its contents. `gralph next`
-  reads it to fill `{{store "key"}}` in guidance.
+  reads it to fill `{{store "key"}}` in guidance. Commits merge only the keys
+  the succeeding run wrote, so parallel subcommand gates don't clobber each
+  other.
+- **`progress.json`** — framework-internal record of completed subcommand work
+  items (key → timestamp/session). Separate from `state.json` because its
+  lifecycle differs: survives session rotation, cleared only on parent success.
+- **`lock`** — flock file serializing concurrent `gralph` processes'
+  state commits (parallel sub-agent workers).
 
 ### Commit-on-success (and the attempts gotcha)
 

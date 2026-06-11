@@ -52,12 +52,12 @@ func (s *State) Save(dir string) error {
 // ---------------------------------------------------------------------------
 
 type Store struct {
-	values map[string]any
-	dirty  bool
+	values    map[string]any
+	dirtyKeys map[string]struct{}
 }
 
 func LoadStore(dir string) (*Store, error) {
-	st := &Store{values: map[string]any{}}
+	st := &Store{values: map[string]any{}, dirtyKeys: map[string]struct{}{}}
 	data, err := os.ReadFile(storePath(dir))
 	if os.IsNotExist(err) {
 		return st, nil
@@ -78,19 +78,37 @@ func (st *Store) Get(key string) (any, bool) {
 
 func (st *Store) Set(key string, v any) {
 	st.values[key] = v
-	st.dirty = true
+	st.dirtyKeys[key] = struct{}{}
 }
 
 // Commit persists the store. Called only after a command succeeds, so a
 // failed validation never leaves half-written values behind.
+//
+// Only the keys written by this run are merged into a fresh read of the
+// file, so parallel subcommand gates (which see a snapshot from their own
+// load) don't clobber each other's evidence -- conflicts narrow to the key
+// level. Callers must hold the state lock.
 func (st *Store) Commit(dir string) error {
-	if !st.dirty {
+	if len(st.dirtyKeys) == 0 {
 		return nil
 	}
-	if err := atomicWriteJSON(storePath(dir), st.values); err != nil {
+	onDisk := map[string]any{}
+	data, err := os.ReadFile(storePath(dir))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read store: %w", err)
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &onDisk); err != nil {
+			return fmt.Errorf("parse store: %w", err)
+		}
+	}
+	for k := range st.dirtyKeys {
+		onDisk[k] = st.values[k]
+	}
+	if err := atomicWriteJSON(storePath(dir), onDisk); err != nil {
 		return err
 	}
-	st.dirty = false
+	st.dirtyKeys = map[string]struct{}{}
 	return nil
 }
 

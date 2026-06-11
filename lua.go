@@ -18,7 +18,13 @@ type LuaOutcome struct {
 
 // runLua executes the command's external lua script with the YAML-declared
 // arguments and the user store exposed through the `gralph` helper object.
-func runLua(script string, args map[string]string, store *Store, candidates []string) LuaOutcome {
+//
+// prog is non-nil only for a parent finalize gate, exposing read-only
+// gralph.progress.keys/count over the completed subcommand work items.
+// isSub marks a subcommand gate, where gralph.route is forbidden (routing
+// belongs to the parent: under parallel workers "the last subcommand" is
+// non-deterministic and must not pick the graph path).
+func runLua(script string, args map[string]string, store *Store, candidates []string, prog *Progress, isSub bool) LuaOutcome {
 	out := LuaOutcome{}
 
 	L := lua.NewState()
@@ -62,6 +68,10 @@ func runLua(script string, args map[string]string, store *Store, candidates []st
 	// a name outside the candidate list is a runtime error.
 	g.RawSetString("route", L.NewFunction(func(L *lua.LState) int {
 		name := L.CheckString(1)
+		if isSub {
+			L.RaiseError("gralph.route(%q): gralph.route is not available in subcommand gates (routing belongs to the parent command)", name)
+			return 0
+		}
 		for _, c := range candidates {
 			if c == name {
 				out.Route = name
@@ -71,6 +81,28 @@ func runLua(script string, args map[string]string, store *Store, candidates []st
 		L.RaiseError("gralph.route(%q): not a successor candidate %v", name, candidates)
 		return 0
 	}))
+
+	// gralph.progress.keys / gralph.progress.count -- read-only view of the
+	// completed subcommand work items, for parent finalize gates that verify
+	// the aggregate.
+	if prog != nil {
+		progT := L.NewTable()
+		progT.RawSetString("keys", L.NewFunction(func(L *lua.LState) int {
+			sub := L.CheckString(1)
+			tbl := L.NewTable()
+			for i, k := range prog.DoneKeys(sub) {
+				tbl.RawSetInt(i+1, lua.LString(k))
+			}
+			L.Push(tbl)
+			return 1
+		}))
+		progT.RawSetString("count", L.NewFunction(func(L *lua.LState) int {
+			sub := L.CheckString(1)
+			L.Push(lua.LNumber(prog.CountDone(sub)))
+			return 1
+		}))
+		g.RawSetString("progress", progT)
+	}
 
 	// gralph.fail("reason: ...") -- marks validation failure; the script may
 	// keep running. If never called (and no error), the run is a success.
