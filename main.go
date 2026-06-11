@@ -17,7 +17,7 @@ const usage = `gralph - ralph loop orchestrator
 Usage:
   gralph run <profile.yaml> [--max-iterations N]    run the ralph loop (orchestrator)
   gralph next [--profile <profile.yaml>]            (agent) get current task guidance
-  gralph <command> [--profile p] [--arg value ...]  (agent) run a YAML-defined custom command
+  gralph do <command> [--profile p] [--arg v ...]   (agent) run a YAML-defined custom command
   gralph status [--profile p] [--json]              show cursor, session, failures, quota progress
   gralph reset [--profile p] [--force] [--failures] reset the state dir (--failures: counters only)
   gralph validate <profile.yaml>                    lint a profile without running anything
@@ -173,19 +173,35 @@ func main() {
 		}
 		os.Exit(code)
 
-	default: // YAML-defined custom command
-		name := os.Args[1]
-		p, rest, err := profileFromSessionArgs(os.Args[2:])
-		if err != nil {
-			fatal(err)
+	case "do":
+		if len(os.Args) < 3 || os.Args[2] == "" || os.Args[2][0] == '-' {
+			fatal(fmt.Errorf("usage: gralph do <command> [--profile p] [--arg value ...]"))
 		}
-		res, err := runCustomCommand(p, name, rest)
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Println(res.Message)
-		os.Exit(res.ExitCode)
+		runDo(os.Args[2], os.Args[3:])
+
+	default:
+		// Legacy flat form `gralph <command>`. Deprecated: a custom command
+		// here can be shadowed by any built-in added later, so the canonical
+		// form is `gralph do <command>`. Kept for one transition period.
+		fmt.Fprintf(os.Stderr,
+			"gralph: warning: `gralph %s` is deprecated; use `gralph do %s`\n",
+			os.Args[1], os.Args[1])
+		runDo(os.Args[1], os.Args[2:])
 	}
+}
+
+// runDo dispatches one YAML-defined custom command and exits the process.
+func runDo(name string, args []string) {
+	p, rest, err := profileFromSessionArgs(args)
+	if err != nil {
+		fatal(err)
+	}
+	res, err := runCustomCommand(p, name, rest)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Println(res.Message)
+	os.Exit(res.ExitCode)
 }
 
 // parseRunArgs parses the arguments of `gralph run`. The profile path may

@@ -28,7 +28,7 @@ agent:
 
 1. runs `gralph next` to be told the **one** command it must eventually run,
 2. does whatever non-deterministic work that command requires,
-3. runs that command with arguments (e.g. `gralph verify --report r.json`).
+3. runs that command with arguments (e.g. `gralph do verify --report r.json`).
 
 That command executes a user-written **Lua script** that deterministically
 checks the work. On success the cursor advances to the next graph node and the
@@ -71,7 +71,7 @@ it — ask or inspect first.
 This is the core of the skill. Apply it to every command you write.
 
 **A gate must check evidence, not assertions.** The agent will happily run
-`gralph verify --ok yes`. That proves nothing. A real gate inspects an artifact
+`gralph do verify --ok yes`. That proves nothing. A real gate inspects an artifact
 the work necessarily produced and that the agent cannot fabricate cheaply:
 
 | ❌ Self-attestation (avoid) | ✅ Evidence (prefer) |
@@ -161,8 +161,9 @@ gotcha in `reference/execution-model.md`.
 ## Validation rules gralph enforces (don't trip them)
 
 The profile loader rejects, at load time: zero commands; a command with no
-name; the reserved name `DONE` or any built-in CLI word (`run`, `next`, `help`,
-`version`, `status`, `reset`, `validate`, `try`); duplicate command names; a
+name; the reserved names `DONE` (completion sentinel) and `do` (the namespacing
+word — custom commands are invoked as `gralph do <name>`, so built-in CLI words
+like `run` or `next` are fine as command names); duplicate command names; a
 `next:` entry naming an unknown command; and **a command with >1 successor but
 no `lua:`** (nothing could route it). For subcommands it additionally rejects: a name colliding with
 any command or other subcommand (shared CLI namespace); `count` > 1 with no

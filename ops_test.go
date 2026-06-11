@@ -12,31 +12,28 @@ import (
 // failure-counter escape hatch for manual sessions.
 
 // ---------------------------------------------------------------------------
-// Reserved names: built-ins win in the dispatcher, so the loader must reject
-// commands and subcommands that would be shadowed.
+// Reserved names: custom commands live under `gralph do <name>`, so only the
+// namespacing word itself is reserved -- built-in words are free to use.
 // ---------------------------------------------------------------------------
 
 func TestReservedCommandNames(t *testing.T) {
-	for _, name := range []string{"run", "next", "help", "version", "status", "reset", "validate", "try"} {
-		t.Run("command "+name, func(t *testing.T) {
-			pp := filepath.Join(t.TempDir(), "profile.yaml")
-			yaml := "commands:\n  - name: " + name + "\n"
-			if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			_, err := LoadProfile(pp)
-			if err == nil || !strings.Contains(err.Error(), "reserved command name") {
-				t.Fatalf("want reserved-name error, got %v", err)
-			}
-		})
-	}
+	t.Run("command do", func(t *testing.T) {
+		pp := filepath.Join(t.TempDir(), "profile.yaml")
+		if err := os.WriteFile(pp, []byte("commands:\n  - name: do\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := LoadProfile(pp)
+		if err == nil || !strings.Contains(err.Error(), "reserved command name") {
+			t.Fatalf("want reserved-name error, got %v", err)
+		}
+	})
 
-	t.Run("subcommand", func(t *testing.T) {
+	t.Run("subcommand do", func(t *testing.T) {
 		pp := filepath.Join(t.TempDir(), "profile.yaml")
 		yaml := `commands:
   - name: p
     subcommands:
-      - name: try
+      - name: do
 `
 		if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
 			t.Fatal(err)
@@ -46,6 +43,21 @@ func TestReservedCommandNames(t *testing.T) {
 			t.Fatalf("want reserved-name error, got %v", err)
 		}
 	})
+
+	// Built-in words are reachable via `gralph do <name>`, so the loader
+	// accepts them -- new built-ins must never invalidate existing profiles.
+	for _, name := range []string{"run", "next", "status", "try"} {
+		t.Run("builtin word "+name+" allowed", func(t *testing.T) {
+			pp := filepath.Join(t.TempDir(), "profile.yaml")
+			yaml := "commands:\n  - name: " + name + "\n"
+			if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadProfile(pp); err != nil {
+				t.Fatalf("built-in word must be allowed as a command name, got %v", err)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +117,26 @@ func TestLintLuaChecks(t *testing.T) {
 			t.Fatal("lint must compile lua without executing it")
 		}
 	})
+}
+
+func TestLintWarnsOnFlatGuidanceInvocation(t *testing.T) {
+	p := writeProfile(t, `commands:
+  - name: plan
+    guidance: |
+      RUN: ./gralph plan --goal x
+      gralph planner is not a defined name and must not match.
+      gralph do plan is the canonical form and must not match.
+    next: [wrap]
+  - name: wrap
+    guidance: close out
+`, nil)
+	errs, warns := lintProfile(p.Path)
+	if len(errs) != 0 {
+		t.Fatalf("errs = %v", errs)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], "guidance invokes `gralph plan` (deprecated flat form); write `gralph do plan`") {
+		t.Fatalf("warns = %v", warns)
+	}
 }
 
 func TestLintGraphWarnings(t *testing.T) {

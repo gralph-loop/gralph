@@ -172,10 +172,12 @@ func formatUsage(cmd *CommandSpec) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// invocationLine is the exact `gralph <name> ...` line the agent must run:
-// required args as `--name <value>`, optional ones bracketed.
+// invocationLine is the exact `gralph do <name> ...` line the agent must run:
+// required args as `--name <value>`, optional ones bracketed. The `do` prefix
+// keeps custom commands out of the built-in namespace, so new built-ins can
+// never shadow a profile's commands.
 func invocationLine(name string, args []ArgSpec) string {
-	parts := []string{"gralph", name}
+	parts := []string{"gralph", "do", name}
 	for i := range args {
 		a := &args[i]
 		if a.Required {

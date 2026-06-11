@@ -19,8 +19,8 @@ echo "$guidance" | sed 's/^/  [next] /'
 run_line="$(printf '%s\n' "$guidance" | grep '^RUN:' | head -1 | sed 's/^RUN: //')"
 [ -n "$run_line" ] || { echo "agent: no RUN line"; exit 1; }
 
-# Identify which command we're closing (token after 'gralph').
-cmd="$(printf '%s' "$run_line" | awk '{print $2}')"
+# Identify which command we're closing (token after 'gralph do').
+cmd="$(printf '%s' "$run_line" | awk '{ if ($2 == "do") print $3; else print $2 }')"
 
 # --- simulated, command-specific preparation ----------------------------------
 case "$cmd" in

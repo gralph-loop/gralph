@@ -3,7 +3,7 @@
 #
 # build-all is a fork/join node: while the cursor sits on it, the agent (or
 # its parallel sub-agents) must succeed `make-part` for 3 distinct keys and
-# `write-doc` once. Only then does `gralph build-all` itself run, as the
+# `write-doc` once. Only then does `gralph do build-all` itself run, as the
 # finalize gate that verifies the aggregate and advances the cursor.
 
 agent:
@@ -21,11 +21,11 @@ commands:
       {{subprogress}}
       For each remaining part p: create out/<p>.txt with non-empty content,
       then verify that one item with:
-      RUN: ./gralph make-part --part <p>
+      RUN: ./gralph do make-part --part <p>
       For the doc: create out/manual.md, then verify it with:
-      RUN: ./gralph write-doc
+      RUN: ./gralph do write-doc
       When every quota is met, finalize the node with:
-      RUN: ./gralph build-all
+      RUN: ./gralph do build-all
     subcommands:
       - name: make-part
         count: 3
@@ -47,4 +47,4 @@ commands:
   - name: wrap
     guidance: |
       Everything is built ({{store "parts_csv"}}). Close out the run.
-      RUN: ./gralph wrap
+      RUN: ./gralph do wrap
