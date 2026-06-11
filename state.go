@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,7 +26,7 @@ func storePath(dir string) string { return filepath.Join(dir, "store.json") }
 
 func LoadState(dir string) (*State, error) {
 	s := &State{Failures: map[string]int{}}
-	data, err := os.ReadFile(statePath(dir))
+	data, err := readFileRetry(statePath(dir))
 	if os.IsNotExist(err) {
 		return s, nil
 	}
@@ -58,7 +59,7 @@ type Store struct {
 
 func LoadStore(dir string) (*Store, error) {
 	st := &Store{values: map[string]any{}, dirtyKeys: map[string]struct{}{}}
-	data, err := os.ReadFile(storePath(dir))
+	data, err := readFileRetry(storePath(dir))
 	if os.IsNotExist(err) {
 		return st, nil
 	}
@@ -93,7 +94,7 @@ func (st *Store) Commit(dir string) error {
 		return nil
 	}
 	onDisk := map[string]any{}
-	data, err := os.ReadFile(storePath(dir))
+	data, err := readFileRetry(storePath(dir))
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read store: %w", err)
 	}
@@ -126,5 +127,24 @@ func atomicWriteJSON(path string, v any) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	for i := 0; ; i++ {
+		err := os.Rename(tmp, path)
+		if err == nil || !isTransientFSError(err) || i >= 20 {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// readFileRetry is os.ReadFile plus a short retry loop for transient
+// Windows sharing violations (a concurrent commit renaming over the file
+// while we open it). Everywhere else it behaves exactly like os.ReadFile.
+func readFileRetry(path string) ([]byte, error) {
+	for i := 0; ; i++ {
+		data, err := os.ReadFile(path)
+		if err == nil || !isTransientFSError(err) || i >= 20 {
+			return data, err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

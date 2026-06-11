@@ -46,7 +46,7 @@ func progressPath(dir string) string { return filepath.Join(dir, "progress.json"
 // yields fresh, empty progress.
 func LoadProgress(dir, command string) (*Progress, error) {
 	fresh := &Progress{Command: command, Done: map[string]map[string]DoneMeta{}}
-	data, err := os.ReadFile(progressPath(dir))
+	data, err := readFileRetry(progressPath(dir))
 	if os.IsNotExist(err) {
 		return fresh, nil
 	}

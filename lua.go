@@ -29,7 +29,7 @@ type LuaOutcome struct {
 //
 // A positive timeout aborts the script via the lua context; the abort is a
 // SCRIPT ERROR (it counts toward the failure threshold). Zero = no timeout.
-func runLua(script string, args map[string]string, store *Store, candidates []string, prog *Progress, isSub bool, timeout time.Duration) LuaOutcome {
+func runLua(script string, profileDir string, args map[string]string, store *Store, candidates []string, prog *Progress, isSub bool, timeout time.Duration) LuaOutcome {
 	out := LuaOutcome{}
 
 	L := lua.NewState()
@@ -42,6 +42,12 @@ func runLua(script string, args map[string]string, store *Store, candidates []st
 	}
 
 	g := L.NewTable()
+
+	// gralph.profile_dir -- absolute path of the profile directory. Relative
+	// paths in lua (io.open etc.) resolve against the cwd of the agent that
+	// invoked the command, which is not guaranteed; scripts should join file
+	// paths onto this instead.
+	g.RawSetString("profile_dir", lua.LString(profileDir))
 
 	// gralph.args.<name>
 	argsT := L.NewTable()
@@ -181,15 +187,27 @@ func luaToGo(v lua.LValue) (any, error) {
 	case lua.LString:
 		return string(t), nil
 	case *lua.LTable:
-		// Array if it has only consecutive integer keys starting at 1.
-		n := t.Len()
-		isArray := n > 0
+		// Array only if the keys are exactly the consecutive integers 1..n.
+		// A sparse table like {[1]="a", [3]="b"} must NOT be treated as an
+		// array (t.Len() stops at the first gap and would silently drop
+		// entries); it falls through to the string-keyed map conversion.
+		n := 0
+		maxKey := 0
+		isArray := true
 		t.ForEach(func(k, _ lua.LValue) {
-			if _, ok := k.(lua.LNumber); !ok {
+			n++
+			num, ok := k.(lua.LNumber)
+			if !ok || lua.LNumber(int(num)) != num || int(num) < 1 {
 				isArray = false
+				return
+			}
+			if int(num) > maxKey {
+				maxKey = int(num)
 			}
 		})
-		if isArray {
+		// Keys are unique, so "all integers in [1, n] and max == n" means
+		// the key set is exactly {1..n}.
+		if isArray && n > 0 && maxKey == n {
 			arr := make([]any, 0, n)
 			var convErr error
 			for i := 1; i <= n; i++ {
