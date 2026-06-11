@@ -1,4 +1,10 @@
+# 빌드 산출물
 dist/
-.gralph/
-!example/.gralph/
 /gralph
+/gralph.exe
+example/gralph
+
+# 실행 산출물: 상태 디렉터리와 예제 리포트는 커밋하지 않는다.
+.gralph-state/
+.gralph/
+example/report.txt
