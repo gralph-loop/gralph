@@ -90,14 +90,14 @@ case "$guidance" in
     mkdir -p out
     for p in alpha beta gamma; do
       if ! echo "$guidance" | grep -q "$p"; then
-        ( echo data > "out/$p.txt"; "$GRALPH" make-part --part "$p" >/dev/null ) &
+        ( echo data > "out/$p.txt"; "$GRALPH" do make-part --part "$p" >/dev/null ) &
       fi
     done
     wait
-    "$GRALPH" build-all >/dev/null
+    "$GRALPH" do build-all >/dev/null
     ;;
   *"Current task: wrap"*)
-    "$GRALPH" wrap >/dev/null
+    "$GRALPH" do wrap >/dev/null
     ;;
 esac
 exit 0
@@ -355,11 +355,11 @@ prompt: GLOBAL PROMPT
 commands:
   - name: implement
     guidance: |
-      RUN: gralph implement
+      RUN: gralph do implement
     next: [verify]
   - name: verify
     guidance: |
-      RUN: gralph verify
+      RUN: gralph do verify
     agent:
       command: ["bash", "agent-verify.sh", "{{prompt}}"]
     prompt: VERIFY PROMPT
@@ -373,7 +373,7 @@ set -u
 GRALPH=%q
 printf '%%s' "$1" > global-prompt.txt
 "$GRALPH" next >/dev/null
-"$GRALPH" implement >/dev/null
+"$GRALPH" do implement >/dev/null
 exit 0
 `, bin))
 	write("agent-verify.sh", fmt.Sprintf(`#!/usr/bin/env bash
@@ -381,7 +381,7 @@ set -u
 GRALPH=%q
 printf '%%s' "$1" > verify-prompt.txt
 "$GRALPH" next >/dev/null
-"$GRALPH" verify >/dev/null
+"$GRALPH" do verify >/dev/null
 exit 0
 `, bin))
 

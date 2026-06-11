@@ -27,9 +27,9 @@ except ImportError:
     sys.exit(2)
 
 RESERVED = "DONE"
-# Built-in CLI words: the dispatcher resolves these before YAML commands, so
-# the loader rejects them as command/subcommand names (shared CLI namespace).
-RESERVED_CLI = {"run", "next", "help", "version", "status", "reset", "validate", "try"}
+# Custom commands are invoked as `gralph do <name>`, so built-in CLI words no
+# longer collide; only the namespacing word `do` itself is reserved.
+RESERVED_CLI = {"do"}
 
 
 def main(argv):
@@ -102,7 +102,7 @@ def main(argv):
         if name == RESERVED:
             err(f'"{RESERVED}" is a reserved command name')
         if name in RESERVED_CLI:
-            err(f'"{name}" is a built-in gralph subcommand and cannot be a command name')
+            err(f'"{name}" is the `gralph do` namespacing word and cannot be a command name')
         if name in by_name:
             err(f'duplicate command name "{name}"')
         by_name[name] = c
@@ -125,7 +125,7 @@ def main(argv):
             if sn == RESERVED:
                 err(f'"{RESERVED}" is a reserved command name')
             if sn in RESERVED_CLI:
-                err(f'"{sn}" is a built-in gralph subcommand and cannot be a subcommand name')
+                err(f'"{sn}" is the `gralph do` namespacing word and cannot be a subcommand name')
             if sn in by_name:
                 err(f'subcommand "{sn}" of "{name}" clashes with a command name')
             if sn in sub_names:

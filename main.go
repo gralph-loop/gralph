@@ -17,7 +17,7 @@ const usage = `gralph - ralph loop orchestrator
 Usage:
   gralph run <profile.yaml> [--max-iterations N]    run the ralph loop (orchestrator)
   gralph next [--profile <profile.yaml>]            (agent) get current task guidance
-  gralph <command> [--profile p] [--arg value ...]  (agent) run a YAML-defined custom command
+  gralph do <command> [--profile p] [--arg v ...]   (agent) run a YAML-defined custom command
   gralph status [--profile p] [--json]              show cursor, session, failures, quota progress
   gralph reset [--profile p] [--force] [--failures] reset the state dir (--failures: counters only)
   gralph validate <profile.yaml>                    lint a profile without running anything
@@ -173,19 +173,30 @@ func main() {
 		}
 		os.Exit(code)
 
-	default: // YAML-defined custom command
-		name := os.Args[1]
-		p, rest, err := profileFromSessionArgs(os.Args[2:])
-		if err != nil {
-			fatal(err)
+	case "do":
+		if len(os.Args) < 3 || os.Args[2] == "" || os.Args[2][0] == '-' {
+			fatal(fmt.Errorf("usage: gralph do <command> [--profile p] [--arg value ...]"))
 		}
-		res, err := runCustomCommand(p, name, rest)
-		if err != nil {
-			fatal(err)
-		}
-		fmt.Println(res.Message)
-		os.Exit(res.ExitCode)
+		runDo(os.Args[2], os.Args[3:])
+
+	default:
+		fatal(fmt.Errorf("unknown command %q (custom commands run as `gralph do %s`)",
+			os.Args[1], os.Args[1]))
 	}
+}
+
+// runDo dispatches one YAML-defined custom command and exits the process.
+func runDo(name string, args []string) {
+	p, rest, err := profileFromSessionArgs(args)
+	if err != nil {
+		fatal(err)
+	}
+	res, err := runCustomCommand(p, name, rest)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Println(res.Message)
+	os.Exit(res.ExitCode)
 }
 
 // parseRunArgs parses the arguments of `gralph run`. The profile path may

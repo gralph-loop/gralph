@@ -22,7 +22,7 @@ commands:
   - name: plan
     guidance: |
       Decide a one-word goal for this demo project and write it down.
-      RUN: gralph plan --goal <your-goal>
+      RUN: gralph do plan --goal <your-goal>
     args:
       - name: goal
         required: true
@@ -32,7 +32,7 @@ commands:
   - name: implement
     guidance: |
       Implement the goal "{{store "goal"}}". Produce a work report file.
-      RUN: gralph implement --report report.txt
+      RUN: gralph do implement --report report.txt
     args:
       - name: report
         required: true
@@ -43,7 +43,7 @@ commands:
     guidance: |
       Verify the implementation of "{{store "goal"}}" (attempt {{store "attempts"}}).
       Submit your conclusion.
-      RUN: gralph verify --ok yes
+      RUN: gralph do verify --ok yes
     args:
       - name: ok
         required: true
@@ -53,14 +53,14 @@ commands:
   - name: fix
     guidance: |
       Fix the problems found during verification of "{{store "goal"}}".
-      RUN: gralph fix
+      RUN: gralph do fix
     lua: scripts/fix.lua
     next: [verify]
 
   - name: finish
     guidance: |
       Write a closing summary for "{{store "goal"}}".
-      RUN: gralph finish --summary <one line>
+      RUN: gralph do finish --summary <one line>
     args:
       - name: summary
         required: true

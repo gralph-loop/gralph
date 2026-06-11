@@ -25,7 +25,7 @@ commands:
   - name: spec
     guidance: |
       Decide the feature to build for this iteration and name it (one short token).
-      RUN: gralph spec --feature <name>
+      RUN: gralph do spec --feature <name>
     args:
       - { name: feature, required: true, desc: "short feature name" }
     lua: scripts/spec.lua
@@ -35,7 +35,7 @@ commands:
     guidance: |
       Implement "{{store "feature"}}" by writing the source file(s).
       Submit the comma-separated paths you created/changed.
-      RUN: gralph implement --files src/impl.txt
+      RUN: gralph do implement --files src/impl.txt
     args:
       - { name: files, required: true, desc: "comma-separated paths you wrote" }
     lua: scripts/implement.lua
@@ -45,7 +45,7 @@ commands:
     guidance: |
       Verify "{{store "feature"}}" (pass {{store "passes"}}). Make the check pass.
       The gate runs ./check.sh itself; you don't assert the result.
-      RUN: gralph verify
+      RUN: gralph do verify
     lua: scripts/verify.lua
     next: [fix, release]
 
@@ -53,7 +53,7 @@ commands:
     guidance: |
       The check failed. Fix the implementation of "{{store "feature"}}".
       Briefly note what you changed.
-      RUN: gralph fix --note <one short line>
+      RUN: gralph do fix --note <one short line>
     args:
       - { name: note, required: true }
     lua: scripts/fix.lua
@@ -62,7 +62,7 @@ commands:
   - name: release
     guidance: |
       The check passed. Tag the release for "{{store "feature"}}" (semver: vMAJOR.MINOR.PATCH).
-      RUN: gralph release --tag v1.0.0
+      RUN: gralph do release --tag v1.0.0
     args:
       - { name: tag, required: true }
     lua: scripts/release.lua

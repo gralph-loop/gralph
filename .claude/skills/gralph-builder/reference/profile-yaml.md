@@ -38,7 +38,7 @@ commands:                       # required; ≥1
 - name: verify                  # required; unique; must not be "DONE"
   guidance: |                   # rendered by `gralph next` (text/template)
     Verify the build of "{{store "goal"}}" (pass {{store "attempts"}}).
-    RUN: gralph verify --report report.json
+    RUN: gralph do verify --report report.json
   args:                         # arguments the agent must pass as --name value
     - name: report
       required: true
@@ -55,7 +55,7 @@ commands:                       # required; ≥1
 
 | Field | Required | Notes |
 |---|---|---|
-| `name` | yes | Unique across the profile. `DONE` is reserved and rejected. |
+| `name` | yes | Unique across the profile. `DONE` and `do` are reserved and rejected; built-in CLI words are allowed (custom commands run as `gralph do <name>`). |
 | `guidance` | recommended | Text returned by `gralph next` while the cursor is on this node. See templating below. |
 | `args` | no | Each: `name` (required), `required` (bool, default false), `desc` (rendered in the auto-generated usage block). The agent passes them as `--name value` or `--name=value`. |
 | `lua` | see rules | Path (relative to profile) to the validation/routing script. Optional — but **required if `next` has ≥2 entries**. Without Lua a command always succeeds. |
@@ -73,7 +73,7 @@ sits on it, each subcommand must succeed once per **distinct work-item key**,
 itself become runnable — it then acts as the finalize gate (aggregate
 verification + routing) and its success advances the cursor. Built for agents
 that can spawn parallel sub-agents: each worker runs one
-`gralph <subcommand> --<key> <item>` and the state-dir flock keeps concurrent
+`gralph do <subcommand> --<key> <item>` and the state-dir flock keeps concurrent
 commits safe.
 
 ```yaml
@@ -81,7 +81,7 @@ commits safe.
   guidance: |
     Remaining work: {{subprogress}}
     Spawn one sub-agent per remaining item.
-    When all quotas are met RUN: gralph build-all
+    When all quotas are met RUN: gralph do build-all
   subcommands:
     - name: make-part            # shares the CLI namespace: globally unique
       count: 3                   # quota: 3 distinct keys (default 1)
@@ -144,8 +144,9 @@ The profile is rejected if any of these hold:
 - A subcommand has an empty or reserved name, or its name collides with any
   command or other subcommand (they share the CLI namespace).
 - A subcommand has `count` > 1 but no `key`, or its `key` is not a declared arg.
-- A command or subcommand name shadows a built-in CLI word: `run`, `next`,
-  `help`, `version`, `status`, `reset`, `validate`, `try`.
+- A command or subcommand is named `do` (the `gralph do <name>` namespacing
+  word). Built-in CLI words (`run`, `next`, ...) are NOT rejected: the `do`
+  namespace keeps them from ever colliding with custom commands.
 - A node declares an `agent:` override with an empty `command`.
 - An unparsable or non-positive `agent.timeout` / `lua_timeout`.
 

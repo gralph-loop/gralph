@@ -586,7 +586,7 @@ func TestUsageRequiredOptionalAndDesc(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Command to run when done:",
-		"  gralph implement --report <value> [--dry-run <value>]", // optional bracketed
+		"  gralph do implement --report <value> [--dry-run <value>]", // optional bracketed
 		"Arguments:",
 		"  --report   (required)  Path to the work report file", // Desc shown
 		"  --dry-run  (optional)",                               // no Desc -> omitted
@@ -607,7 +607,7 @@ func TestUsageNoArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "Command to run when done:\n  gralph fix\n") {
+	if !strings.Contains(out, "Command to run when done:\n  gralph do fix\n") {
 		t.Fatalf("renderNext output missing bare usage:\n%s", out)
 	}
 	if strings.Contains(out, "Arguments:") {
@@ -661,13 +661,13 @@ func TestUsageCoversSubcommands(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Subcommand to run per work item:",
-		"  gralph sub-a --item <value>", // key arg forced required
+		"  gralph do sub-a --item <value>", // key arg forced required
 		"  (run once per distinct --item, 2 items total)",
 		"  --item  (required)  work-item key",
-		"  gralph sub-b",
+		"  gralph do sub-b",
 		"  (run once)",
 		"Command to run when every quota is met:",
-		"  gralph parent",
+		"  gralph do parent",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("renderNext output missing %q:\n%s", want, out)

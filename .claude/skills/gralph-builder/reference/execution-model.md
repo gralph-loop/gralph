@@ -40,13 +40,13 @@ Driven by the prompt (default or your `prompt:`):
 agent ── gralph next ─────▶ guidance for the current cursor node
                             (pure text/template render; {{store "k"}} only; NO Lua)
 agent ── (non-deterministic work to satisfy that command)
-agent ── gralph <cmd> --arg v ─▶ the node's Lua validates / routes / writes store
+agent ── gralph do <cmd> --arg v ─▶ the node's Lua validates / routes / writes store
 agent ── obeys the response: "End the session" → end now
 ```
 
 ## The command contract (every custom command obeys this)
 
-When the agent runs `gralph <name> --args...`:
+When the agent runs `gralph do <name> --args...`:
 
 - **Wrong command** — if `<name>` isn't the current cursor, it's rejected
   ("not the current command"), exit 1. Does **not** consume the failure budget.
@@ -89,7 +89,7 @@ cursor is on the parent:
   `state.json`): they persist across session rotation (unlike failure counters)
   and reset only on parent success — so a cycle that revisits the node restarts
   its quotas, and a serial agent can resume one-item-per-session.
-- Concurrency: parallel `gralph <subcommand>` processes serialize their
+- Concurrency: parallel `gralph do <subcommand>` processes serialize their
   read-modify-write commits via a flock on `<state_dir>/lock`. Gates run
   outside the lock, so slow verification stays parallel; the duplicate-key
   check is re-done at commit time, so racing workers on the same key produce

@@ -187,13 +187,13 @@ func parseTimeout(field, s string) (time.Duration, error) {
 	return d, nil
 }
 
-// reservedCommandNames are built-in CLI words. The dispatcher resolves them
-// before YAML commands, so a custom command (or subcommand -- they share the
-// CLI namespace) with one of these names could never be invoked; the loader
-// rejects them outright.
+// reservedCommandNames are the names custom commands (and subcommands -- they
+// share the CLI namespace) may not use. Since custom commands are invoked as
+// `gralph do <name>`, built-in words no longer collide and future built-ins
+// can be added freely; only `do` itself stays reserved so the namespacing
+// word is never ambiguous.
 var reservedCommandNames = map[string]bool{
-	"run": true, "next": true, "help": true, "version": true,
-	"status": true, "reset": true, "validate": true, "try": true,
+	"do": true,
 }
 
 func (p *Profile) validate() error {
@@ -210,7 +210,7 @@ func (p *Profile) validate() error {
 			return fmt.Errorf("profile: %q is a reserved command name", DoneCursor)
 		}
 		if reservedCommandNames[c.Name] {
-			return fmt.Errorf("profile: %q is a reserved command name (built-in gralph subcommand)", c.Name)
+			return fmt.Errorf("profile: %q is a reserved command name (the `gralph do` namespacing word)", c.Name)
 		}
 		if _, dup := byName[c.Name]; dup {
 			return fmt.Errorf("profile: duplicate command name %q", c.Name)
@@ -231,7 +231,7 @@ func (p *Profile) validate() error {
 				return fmt.Errorf("profile: %q is a reserved command name", DoneCursor)
 			}
 			if reservedCommandNames[s.Name] {
-				return fmt.Errorf("profile: %q is a reserved command name (built-in gralph subcommand)", s.Name)
+				return fmt.Errorf("profile: %q is a reserved command name (the `gralph do` namespacing word)", s.Name)
 			}
 			if _, clash := byName[s.Name]; clash {
 				return fmt.Errorf("profile: subcommand %q of %q clashes with a command name", s.Name, c.Name)

@@ -20,7 +20,7 @@ commands:
   - name: plan
     guidance: |
       Decide a one-word goal for this demo project and write it down.
-      RUN: ./gralph plan --goal <your-goal>
+      RUN: ./gralph do plan --goal <your-goal>
     args:
       - name: goal
         required: true
@@ -44,7 +44,7 @@ commands:
     guidance: |
       Verify the implementation of "{{store "goal"}}" (attempt {{store "attempts"}}).
       Submit your conclusion.
-      RUN: ./gralph verify --ok yes
+      RUN: ./gralph do verify --ok yes
     args:
       - name: ok
         required: true
@@ -63,7 +63,7 @@ commands:
   - name: finish
     guidance: |
       Write a closing summary for "{{store "goal"}}".
-      RUN: ./gralph finish --summary <one line>
+      RUN: ./gralph do finish --summary <one line>
     args:
       - name: summary
         required: true

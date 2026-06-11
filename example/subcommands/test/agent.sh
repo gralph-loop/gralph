@@ -23,7 +23,7 @@ if echo "$guidance" | grep -q "Current task: build-all"; then
     if ! echo "$guidance" | grep -q "$p"; then
       (
         echo "part $p content" > "out/$p.txt"
-        out="$(gralph make-part --part "$p" 2>&1)"
+        out="$(gralph do make-part --part "$p" 2>&1)"
         echo "$out" | sed "s/^/  [sub-agent $p] /"
       ) &
     fi
@@ -31,12 +31,12 @@ if echo "$guidance" | grep -q "Current task: build-all"; then
   if echo "$guidance" | grep -q "write-doc: 0/1"; then
     (
       echo "# manual" > out/manual.md
-      out="$(gralph write-doc 2>&1)"
+      out="$(gralph do write-doc 2>&1)"
       echo "$out" | sed 's/^/  [sub-agent doc] /'
     ) &
   fi
   wait
-  out="$(gralph build-all 2>&1)"; code=$?
+  out="$(gralph do build-all 2>&1)"; code=$?
   echo "$out" | sed 's/^/  [cmd] /'
   echo "----- agent session end -----"
   exit 0

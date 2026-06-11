@@ -177,8 +177,8 @@ serializes concurrent commits with a state-dir lock.
   guidance: |
     Remaining: {{subprogress}}
     Spawn one sub-agent per remaining file; each runs:
-    RUN: gralph convert --file <name>
-    When every quota is met RUN: gralph convert-all
+    RUN: gralph do convert --file <name>
+    When every quota is met RUN: gralph do convert-all
   subcommands:
     - name: convert
       count: 5

@@ -224,7 +224,60 @@ func lintProfile(path string) (errs, warns []string) {
 			"no terminal command (one without `next`) is reachable from %q; the cursor can never become %s and the loop will not finish",
 			entry, DoneCursor))
 	}
+	warns = append(warns, flatInvocationWarnings(p)...)
 	return errs, warns
+}
+
+// flatInvocationWarnings flags hand-written guidance that tells the agent to
+// run `gralph <name>` for a name defined in the profile. The flat form does
+// not dispatch (custom commands run as `gralph do <name>`), so such guidance
+// would send the agent into an unknown-command error.
+func flatInvocationWarnings(p *Profile) (warns []string) {
+	names := map[string]bool{}
+	for i := range p.Commands {
+		c := &p.Commands[i]
+		names[c.Name] = true
+		for j := range c.Subcommands {
+			names[c.Subcommands[j].Name] = true
+		}
+	}
+	for i := range p.Commands {
+		c := &p.Commands[i]
+		for _, n := range flatInvocations(c.Guidance, names) {
+			warns = append(warns, fmt.Sprintf(
+				"command %q: guidance invokes `gralph %s`, which does not dispatch; write `gralph do %s`",
+				c.Name, n, n))
+		}
+	}
+	return warns
+}
+
+// flatInvocations returns each profile-defined name that text invokes as
+// `gralph <name>`, once per name, in first-appearance order.
+func flatInvocations(text string, names map[string]bool) []string {
+	const prefix = "gralph "
+	isNameRune := func(r rune) bool {
+		return r == '-' || r == '_' ||
+			r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+	}
+	seen := map[string]bool{}
+	var out []string
+	for rest := text; ; {
+		i := strings.Index(rest, prefix)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(prefix):]
+		tok := rest
+		if j := strings.IndexFunc(rest, func(r rune) bool { return !isNameRune(r) }); j >= 0 {
+			tok = rest[:j]
+		}
+		if names[tok] && !seen[tok] {
+			seen[tok] = true
+			out = append(out, tok)
+		}
+	}
+	return out
 }
 
 // runValidate is the CLI body of `gralph validate`: errors exit 1, warnings

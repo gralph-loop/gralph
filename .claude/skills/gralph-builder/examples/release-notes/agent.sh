@@ -14,7 +14,7 @@ echo "$guidance" | sed 's/^/  [next] /'
 
 run_line="$(printf '%s\n' "$guidance" | grep '^RUN:' | head -1 | sed 's/^RUN: //')"
 [ -n "$run_line" ] || { echo "agent: no RUN line"; exit 1; }
-cmd="$(printf '%s' "$run_line" | awk '{print $2}')"
+cmd="$(printf '%s' "$run_line" | awk '{ if ($2 == "do") print $3; else print $2 }')"
 
 write_good_notes() {
   cat > NOTES.md <<'MD'
