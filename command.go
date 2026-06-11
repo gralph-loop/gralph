@@ -93,7 +93,7 @@ func runPlainCommand(p *Profile, cmd *CommandSpec, argv []string) (*CommandResul
 	// --- deterministic logic (outside the lock; gates may be slow) ------------
 	var outcome LuaOutcome
 	if lp := p.LuaPath(cmd); lp != "" {
-		outcome = runLua(lp, args, store, cmd.Next, nil, false, p.LuaTimeoutFor(cmd))
+		outcome = runLua(lp, p.Dir, args, store, cmd.Next, nil, false, p.LuaTimeoutFor(cmd))
 	}
 
 	next := resolveSuccessor(cmd, &outcome)
@@ -141,7 +141,7 @@ func runSubcommand(p *Profile, parent *CommandSpec, sub *SubcommandSpec, argv []
 	// --- deterministic logic (outside the lock; gates may be slow) ------------
 	var outcome LuaOutcome
 	if lp := p.SubLuaPath(sub); lp != "" {
-		outcome = runLua(lp, args, store, nil, nil, true, p.LuaTimeoutFor(parent))
+		outcome = runLua(lp, p.Dir, args, store, nil, nil, true, p.LuaTimeoutFor(parent))
 	}
 
 	if outcome.Failed || outcome.ScriptErr != nil {
@@ -249,7 +249,7 @@ func runParentFinalize(p *Profile, cmd *CommandSpec, argv []string) (*CommandRes
 	// --- deterministic logic (outside the lock; gates may be slow) ------------
 	var outcome LuaOutcome
 	if lp := p.LuaPath(cmd); lp != "" {
-		outcome = runLua(lp, args, store, cmd.Next, pr, false, p.LuaTimeoutFor(cmd))
+		outcome = runLua(lp, p.Dir, args, store, cmd.Next, pr, false, p.LuaTimeoutFor(cmd))
 	}
 
 	next := resolveSuccessor(cmd, &outcome)

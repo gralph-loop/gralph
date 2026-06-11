@@ -13,7 +13,17 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # flock(잠금)과 경로 처리는 OS 차이가 실제로 존재하는 영역이라
+        # windows에서도 전체 테스트를 돌린다.
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # windows 러너에서도 기존 스텝의 bash 문법을 그대로 쓴다.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

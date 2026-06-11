@@ -110,15 +110,17 @@ commands:
 
 ## 상태 저장 (파일 분리)
 
-- `.gralph/state.json` — **프레임워크 내부**(사용자 비접근 영역): 커서, 세션 id, 커맨드별 실패 수.
-- `.gralph/store.json` — **유저 store**(lua 전용 KV): 프레임워크는 내용을 건드리지 않는다.
+- `.gralph-state/state.json` — **프레임워크 내부**(사용자 비접근 영역): 커서, 세션 id, 커맨드별 실패 수.
+- `.gralph-state/store.json` — **유저 store**(lua 전용 KV): 프레임워크는 내용을 건드리지 않는다.
   lua의 `store.set`은 커맨드 **성공 시에만** 커밋되어, 실패한 검증이 값을 남기지 않는다.
   커밋은 이번 실행이 변경한 key만 머지하므로 병렬 워커가 서로의 값을 덮어쓰지 않는다.
-- `.gralph/progress.json` — **프레임워크 내부**: 서브커맨드 완료 항목(key별 시각·세션).
+- `.gralph-state/progress.json` — **프레임워크 내부**: 서브커맨드 완료 항목(key별 시각·세션).
   실패 카운터(세션 스코프)·커서(노드 스코프)와 수명이 달라 별도 파일이다. 부모 성공 시
   progress를 먼저 비우고 커서를 전진시키는 쓰기 순서로, 중간에 죽어도 stale 쿼터가
   재방문에 이월되지 않는다(보수적으로 재작업).
-- `.gralph/lock` — 병렬 `gralph` 프로세스 간 read-modify-write 직렬화용 flock 파일.
+- `.gralph-state/lock` — 병렬 `gralph` 프로세스 간 read-modify-write 직렬화용 flock 파일.
+
+상태 디렉터리(기본 `.gralph-state/`)는 실행 중간 산출물이므로 프로젝트의 `.gitignore`에 넣기를 권장한다.
 
 ## lua 브리지 (`gralph` 헬퍼)
 
@@ -128,10 +130,13 @@ gralph.store.get("key")       -- 유저 KV 읽기 (스칼라/중첩 테이블)
 gralph.store.set("key", val)  -- 유저 KV 쓰기 (성공 시 커밋)
 gralph.route("name")          -- 후보 여럿일 때 후속 지정 (서브커맨드 게이트에선 금지)
 gralph.fail("reason: ...")    -- 검증 실패 표시. 미호출 시 성공
+gralph.profile_dir            -- 프로파일 디렉터리 절대경로 (문자열)
 gralph.progress.keys("sub")   -- (finalize 게이트 한정) 완료 key 배열
 gralph.progress.count("sub")  -- (finalize 게이트 한정) 완료 항목 수
 ```
 
+- **주의**: lua 안의 상대 경로(`io.open` 등)는 커맨드를 호출한 에이전트의 cwd 기준이라
+  보장이 없다. 파일 경로는 `gralph.profile_dir`에 이어 붙여 절대경로로 만들 것.
 - `fail`의 reason은 실패 응답에 실려 같은 세션에서 무엇을 고칠지 알려준다.
 - lua가 `error()`로 죽으면 검증 실패와 구분해 **SCRIPT ERROR**로 분류하되 실패 카운트에는 포함한다.
 - `lua_timeout`(프로파일 기본값 또는 커맨드별 오버라이드)을 넘긴 스크립트는 중단되며,
@@ -149,7 +154,7 @@ agent:
 prompt: |                                    # 랄프 프롬프트 (생략 시 기본문)
   1. `gralph next`로 다음 할 일을 안내받아라.
   2. 커맨드 응답에서 세션 종료 지시를 받으면 세션을 종료하라.
-state_dir: .gralph                           # 상태 디렉터리 (프로파일 기준 상대경로)
+state_dir: .gralph-state                     # 상태 디렉터리 (프로파일 기준 상대경로)
 fail_threshold: 5                            # 매 n회째 실패에 세션 종료
 lua_timeout: 30s                             # (선택) lua 스크립트 제한 시간 기본값.
                                              # 초과 시 SCRIPT ERROR로 실패 카운트. 생략 시 무제한
