@@ -96,52 +96,77 @@ func TestProfileDefaults(t *testing.T) {
 	}
 }
 
-// Profile names key the default state dir, so two profiles in one workspace
-// are isolated without anyone setting state_dir.
-func TestProfileNameKeysStateDir(t *testing.T) {
+// The instance name keys the default state dir, so one profile definition
+// can drive several isolated flows, and two profiles sharing a workspace
+// never collide -- all without anyone setting state_dir.
+func TestInstanceNameKeysStateDir(t *testing.T) {
 	dir := t.TempDir()
-	write := func(file, yaml string) *Profile {
+	write := func(file string) string {
 		t.Helper()
 		pp := filepath.Join(dir, file)
-		if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
+		if err := os.WriteFile(pp, []byte("commands:\n  - name: a\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		p, err := LoadProfile(pp)
+		return pp
+	}
+	load := func(pp, instance string) *Profile {
+		t.Helper()
+		p, err := LoadProfileAs(pp, instance)
 		if err != nil {
-			t.Fatalf("LoadProfile(%s): %v", file, err)
+			t.Fatalf("LoadProfileAs(%s, %q): %v", pp, instance, err)
 		}
 		return p
 	}
 
-	a := write("build.yaml", "commands:\n  - name: a\n")
-	b := write("review.yaml", "name: nightly\ncommands:\n  - name: a\n")
-	if a.StateDir != filepath.Join(dir, ".gralph", "build") {
-		t.Fatalf("derived-name state dir = %q", a.StateDir)
+	build := write("build.yaml")
+	review := write("review.yaml")
+	if got := load(build, "").StateDir; got != filepath.Join(dir, ".gralph", "build") {
+		t.Fatalf("derived-instance state dir = %q", got)
 	}
-	if b.StateDir != filepath.Join(dir, ".gralph", "nightly") {
-		t.Fatalf("explicit-name state dir = %q", b.StateDir)
+	if got := load(review, "").StateDir; got != filepath.Join(dir, ".gralph", "review") {
+		t.Fatalf("second profile's state dir = %q", got)
 	}
-	if a.StateDir == b.StateDir {
-		t.Fatal("two profiles in one dir must not share a default state dir")
+	// One definition, two instances: --name picks the flow.
+	if got := load(build, "feat-a").StateDir; got != filepath.Join(dir, ".gralph", "feat-a") {
+		t.Fatalf("explicit-instance state dir = %q", got)
 	}
 
-	// An explicit state_dir stays authoritative regardless of the name.
-	c := write("third.yaml", "name: nightly\nstate_dir: custom-state\ncommands:\n  - name: a\n")
-	if c.StateDir != filepath.Join(dir, "custom-state") {
-		t.Fatalf("explicit state_dir = %q", c.StateDir)
+	// An explicit state_dir stays authoritative regardless of the instance.
+	pp := filepath.Join(dir, "third.yaml")
+	if err := os.WriteFile(pp, []byte("state_dir: custom-state\ncommands:\n  - name: a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := load(pp, "feat-a").StateDir; got != filepath.Join(dir, "custom-state") {
+		t.Fatalf("explicit state_dir = %q", got)
 	}
 }
 
-func TestProfileNameMustBePathComponent(t *testing.T) {
+func TestInstanceNameMustBePathComponent(t *testing.T) {
+	pp := filepath.Join(t.TempDir(), "profile.yaml")
+	if err := os.WriteFile(pp, []byte("commands:\n  - name: a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"a/b", `a\b`, ".", ".."} {
+		if _, err := LoadProfileAs(pp, name); err == nil || !strings.Contains(err.Error(), "not usable as a directory name") {
+			t.Fatalf("instance %q: want directory-name error, got %v", name, err)
+		}
+	}
+}
+
+// --profile and --name are stripped by the CLI before a custom command sees
+// its args, so the loader must reject them as declared arg names.
+func TestReservedArgNames(t *testing.T) {
+	for _, yaml := range []string{
+		"commands:\n  - name: a\n    args:\n      - { name: name }\n",
+		"commands:\n  - name: a\n    args:\n      - { name: profile }\n",
+		"commands:\n  - name: p\n    subcommands:\n      - name: s\n        args:\n          - { name: name }\n",
+	} {
 		pp := filepath.Join(t.TempDir(), "profile.yaml")
-		// Single-quoted YAML: no escape processing, so backslashes survive.
-		yaml := "name: '" + name + "'\ncommands:\n  - name: a\n"
 		if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := LoadProfile(pp); err == nil || !strings.Contains(err.Error(), "not usable as a directory name") {
-			t.Fatalf("name %q: want directory-name error, got %v", name, err)
+		if _, err := LoadProfile(pp); err == nil || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("want reserved-arg error, got %v", err)
 		}
 	}
 }

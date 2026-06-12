@@ -49,6 +49,15 @@ func runLoop(ctx context.Context, p *Profile, maxIterations int) error {
 		return fmt.Errorf("profile: agent.command is required to run the loop")
 	}
 
+	// State the instance up front: a mistyped --name silently lands on an
+	// empty state dir, and "starting a fresh flow" is the only visible
+	// difference from resuming the one the user meant.
+	if _, err := os.Stat(statePath(p.StateDir)); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "[gralph] instance %q: no existing state in %s; starting a fresh flow\n", p.Name, p.StateDir)
+	} else {
+		fmt.Fprintf(os.Stderr, "[gralph] instance %q: resuming from %s\n", p.Name, p.StateDir)
+	}
+
 	consecutiveFailures := 0
 	for i := 1; ; i++ {
 		if maxIterations > 0 && i > maxIterations {
@@ -172,7 +181,10 @@ func launchAgent(ctx context.Context, p *Profile, command []string, prompt strin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),
-		"GRALPH_PROFILE="+p.Path, // lets `gralph next` / custom commands find the profile
+		// Lets `gralph next` / custom commands find the profile and operate
+		// on the same instance's state dir as the orchestrator.
+		"GRALPH_PROFILE="+p.Path,
+		"GRALPH_INSTANCE_NAME="+p.Name,
 	)
 	cmd.Cancel = func() error {
 		// Graceful first; WaitDelay hard-kills if the process lingers.

@@ -20,7 +20,7 @@ import (
 // statusReport is the machine-readable shape of `gralph status --json`.
 type statusReport struct {
 	Profile     string         `json:"profile"`
-	Name        string         `json:"name"`
+	Instance    string         `json:"instance"`
 	StateDir    string         `json:"state_dir"`
 	Cursor      string         `json:"cursor"`
 	SessionID   string         `json:"session_id"`
@@ -45,7 +45,7 @@ func buildStatus(p *Profile) (*statusReport, error) {
 	}
 	r := &statusReport{
 		Profile:   p.Path,
-		Name:      p.Name,
+		Instance:  p.Name,
 		StateDir:  p.StateDir,
 		Cursor:    st.Cursor,
 		SessionID: st.SessionID,
@@ -87,7 +87,8 @@ func printStatus(p *Profile, asJSON bool) error {
 		fmt.Println(string(data))
 		return nil
 	}
-	fmt.Printf("profile:   %s (%s)\n", r.Profile, r.Name)
+	fmt.Printf("profile:   %s\n", r.Profile)
+	fmt.Printf("instance:  %s\n", r.Instance)
 	fmt.Printf("state dir: %s\n", r.StateDir)
 	if r.Cursor == "" {
 		fmt.Printf("cursor:    (not started; entry is %q)\n", p.FirstCommand().Name)

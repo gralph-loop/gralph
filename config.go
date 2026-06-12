@@ -101,11 +101,6 @@ type AgentSpec struct {
 
 // Profile is the user-supplied YAML profile.
 type Profile struct {
-	// Name identifies this profile's flow; the default state dir is keyed by
-	// it (".gralph/<name>"), so several profiles in one workspace stay
-	// isolated without anyone touching state_dir. Defaults to the profile
-	// filename without its extension.
-	Name          string        `yaml:"name"`
 	Agent         AgentSpec     `yaml:"agent"`
 	Prompt        string        `yaml:"prompt"`
 	StateDir      string        `yaml:"state_dir"`
@@ -116,6 +111,12 @@ type Profile struct {
 	// lua_timeout. Empty means no timeout.
 	LuaTimeout string `yaml:"lua_timeout"`
 
+	// Name is the instance name: which flow's state this process operates
+	// on. The default state dir is keyed by it (".gralph/<name>"), so one
+	// profile definition can drive several isolated flows. Resolved at load
+	// time from --name / $GRALPH_INSTANCE_NAME, defaulting to the profile
+	// filename without its extension -- never from the YAML itself.
+	Name string `yaml:"-"`
 	// Dir is the directory containing the profile file (not from YAML).
 	Dir string `yaml:"-"`
 	// Path is the absolute path of the profile file (not from YAML).
@@ -130,8 +131,13 @@ const DefaultPrompt = `You are running inside a gralph (ralph loop) session.
 2. Your job is to do whatever is necessary to be able to run that gralph command — figure out and carry out the work that running it requires. Once you've done that, run the instructed gralph command with its arguments.
 3. Whenever a gralph command's response tells you to end the session, end the session immediately.`
 
-// LoadProfile reads, defaults and validates a profile.
-func LoadProfile(path string) (*Profile, error) {
+// LoadProfile reads, defaults and validates a profile under the default
+// instance name (the profile filename without its extension).
+func LoadProfile(path string) (*Profile, error) { return LoadProfileAs(path, "") }
+
+// LoadProfileAs is LoadProfile for an explicit instance name; empty means
+// the default.
+func LoadProfileAs(path, instance string) (*Profile, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -146,11 +152,12 @@ func LoadProfile(path string) (*Profile, error) {
 	}
 	p.Path = abs
 	p.Dir = filepath.Dir(abs)
+	p.Name = instance
 	if p.Name == "" {
 		base := filepath.Base(abs)
 		p.Name = strings.TrimSuffix(base, filepath.Ext(base))
 	}
-	if err := validateProfileName(p.Name); err != nil {
+	if err := validateInstanceName(p.Name); err != nil {
 		return nil, err
 	}
 	defaultedStateDir := p.StateDir == ""
@@ -190,12 +197,12 @@ func LoadProfile(path string) (*Profile, error) {
 	return &p, nil
 }
 
-// validateProfileName guards the name's use as a state-dir path component:
-// it must stay a single, non-special component. Derived names (filename
-// stems) normally pass; an odd filename is reported with the fix.
-func validateProfileName(name string) error {
+// validateInstanceName guards the instance name's use as a state-dir path
+// component: it must stay a single, non-special component. Derived names
+// (filename stems) normally pass; an odd one is reported with the fix.
+func validateInstanceName(name string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
-		return fmt.Errorf("profile: name %q is not usable as a directory name; set an explicit `name:` in the profile", name)
+		return fmt.Errorf("instance name %q is not usable as a directory name; pass a valid --name", name)
 	}
 	return nil
 }
@@ -245,6 +252,23 @@ var reservedCommandNames = map[string]bool{
 	"do": true,
 }
 
+// reservedArgNames are arg names the CLI consumes for itself before a custom
+// command ever sees them (profileFromSessionArgs strips --profile / --name),
+// so declaring them would silently swallow the agent's value.
+var reservedArgNames = map[string]bool{
+	"profile": true,
+	"name":    true,
+}
+
+func validateArgSpecs(owner string, args []ArgSpec) error {
+	for _, a := range args {
+		if reservedArgNames[a.Name] {
+			return fmt.Errorf("profile: %s: arg %q is reserved (consumed by the gralph CLI itself)", owner, a.Name)
+		}
+	}
+	return nil
+}
+
 func (p *Profile) validate() error {
 	if len(p.Commands) == 0 {
 		return fmt.Errorf("profile: at least one command is required")
@@ -263,6 +287,9 @@ func (p *Profile) validate() error {
 		}
 		if _, dup := byName[c.Name]; dup {
 			return fmt.Errorf("profile: duplicate command name %q", c.Name)
+		}
+		if err := validateArgSpecs(fmt.Sprintf("command %q", c.Name), c.Args); err != nil {
+			return err
 		}
 		byName[c.Name] = c
 	}
@@ -289,6 +316,9 @@ func (p *Profile) validate() error {
 				return fmt.Errorf("profile: duplicate subcommand name %q (in %q and %q)", s.Name, parent, c.Name)
 			}
 			seenSub[s.Name] = c.Name
+			if err := validateArgSpecs(fmt.Sprintf("subcommand %q of %q", s.Name, c.Name), s.Args); err != nil {
+				return err
+			}
 			if s.Count <= 0 {
 				s.Count = 1
 			}

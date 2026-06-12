@@ -122,9 +122,13 @@ budget is **per session**, not global.
 
 ## State: two files, two owners
 
-Under `state_dir` (default `.gralph/<profile name>`, resolved relative to the
-profile; the name defaults to the profile filename stem, so profiles sharing a
-workspace get isolated state automatically):
+Under `state_dir` (default `.gralph/<instance>`, resolved relative to the
+profile). The instance name comes from `gralph run --name`, propagated to
+in-session subcommands via `$GRALPH_INSTANCE_NAME`, and defaults to the
+profile filename stem -- so one profile can drive several isolated flows, and
+profiles sharing a workspace get isolated state automatically. Also note:
+`profile` and `name` are reserved arg names (the CLI consumes those flags
+before a custom command sees its args):
 
 - **`state.json`** — framework-internal, off-limits to your Lua. Holds `cursor`,
   `session_id`, and per-command `failures`. You never read or write this from

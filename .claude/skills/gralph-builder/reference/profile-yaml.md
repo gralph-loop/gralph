@@ -7,7 +7,6 @@ directory**.
 ## Top level
 
 ```yaml
-name: my-flow                   # optional; default: profile filename without extension
 agent:
   command: ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"]
   timeout: 30m                  # optional; kill the session past this (Go duration)
@@ -16,7 +15,7 @@ prompt: |                       # optional; a sensible default is used if omitte
   1. Run "gralph next" to receive the gralph command you must eventually run.
   2. Do whatever is needed to be able to run it, then run it with its arguments.
   3. Whenever a command's response says to end the session, end it immediately.
-state_dir: .gralph/my-flow      # optional; default ".gralph/<name>" (relative to profile)
+state_dir: my-state             # optional; default ".gralph/<instance>" (relative to profile)
 fail_threshold: 5               # optional; default 5; every n-th failure recycles the session
 lua_timeout: 30s                # optional; default lua gate time limit (per-command override)
 commands:                       # required; ≥1
@@ -28,8 +27,7 @@ commands:                       # required; ≥1
 | `agent.command` | for `gralph run` | — | argv list; every element may contain `{{prompt}}`, replaced with the ralph prompt. Not needed for in-session subcommands, but required to run the loop. |
 | `agent.timeout` | no | none | Go duration string. A session exceeding it is killed (SIGTERM, then hard kill) and retried like any abnormal agent exit. |
 | `prompt` | no | built-in default | The ralph prompt handed to the agent each session. |
-| `name` | no | filename stem | Identifies this profile's flow and keys the default state dir, so several profiles in one workspace stay isolated. Must be a single path component (no `/`, `\`, `.`, `..`). |
-| `state_dir` | no | `.gralph/<name>` | Where `state.json` + `store.json` live. Relative paths resolve against the profile dir. The loader refuses to run when state from the legacy default (`.gralph-state`) would be silently abandoned; it prints the migration `mv`. |
+| `state_dir` | no | `.gralph/<instance>` | Where `state.json` + `store.json` live. Relative paths resolve against the profile dir. The *instance name* is not a YAML field: it comes from `--name` (or `$GRALPH_INSTANCE_NAME` inside sessions), defaulting to the profile filename stem, so one profile definition can drive several isolated flows. The loader refuses to run when state from the legacy default (`.gralph-state`) would be silently abandoned; it prints the migration `mv`. |
 | `fail_threshold` | no | `5` | Profile-wide failure threshold (per-command override available). Must be > 0. |
 | `lua_timeout` | no | none | Go duration string; aborts a gate that runs longer (SCRIPT ERROR, counts toward the threshold). Per-command override available. |
 | `commands` | yes | — | The graph nodes, in order. `commands[0]` is the entry node. |
@@ -59,7 +57,7 @@ commands:                       # required; ≥1
 |---|---|---|
 | `name` | yes | Unique across the profile. `DONE` and `do` are reserved and rejected; built-in CLI words are allowed (custom commands run as `gralph do <name>`). |
 | `guidance` | recommended | Text returned by `gralph next` while the cursor is on this node. See templating below. |
-| `args` | no | Each: `name` (required), `required` (bool, default false), `desc` (rendered in the auto-generated usage block). The agent passes them as `--name value` or `--name=value`. |
+| `args` | no | Each: `name` (required), `required` (bool, default false), `desc` (rendered in the auto-generated usage block). The agent passes them as `--name value` or `--name=value`. The arg names `profile` and `name` are reserved (the CLI consumes those flags itself). |
 | `lua` | see rules | Path (relative to profile) to the validation/routing script. Optional — but **required if `next` has ≥2 entries**. Without Lua a command always succeeds. |
 | `next` | no | Successor command names. 0 → terminal (success → `DONE`); 1 → unconditional; ≥2 → Lua must `gralph.route`. Every name must be an existing command. |
 | `fail_threshold` | no | Overrides the profile threshold for this node only. |

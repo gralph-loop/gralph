@@ -79,10 +79,15 @@ gralph run profile.yaml
 전진시키고 세션을 종료시킨다. 커서가 끝(`DONE`)에 닿을 때까지 오케스트레이터는
 새 세션을 반복 기동한다.
 
-상태는 상태 디렉터리(기본 `.gralph/<프로파일 name>/`, 프로파일 기준 상대경로)에
-영속된다. `name`은 생략하면 프로파일 파일명(확장자 제외)이므로, 한 워크스페이스에서
-여러 프로파일을 돌려도 상태가 자동으로 격리된다. 실행 중간 산출물이므로 프로젝트의
-`.gitignore`에 `.gralph/`를 넣기를 권장한다.
+상태는 상태 디렉터리(기본 `.gralph/<인스턴스 이름>/`, 프로파일 기준 상대경로)에
+영속된다. **인스턴스 이름**은 `--name` 인자(없으면 에이전트 세션에 주입되는
+`$GRALPH_INSTANCE_NAME`, 그것도 없으면 프로파일 파일명에서 확장자를 뗀 것)로
+정해지며, 프로파일은 *정의*, 인스턴스는 *그 정의로 도는 하나의 흐름*이다. 그래서
+프로파일 YAML 하나로 독립된 흐름 여러 개를 돌릴 수 있고
+(`gralph run tdd.yaml --name feat-a` / `--name feat-b`), 한 워크스페이스의 서로 다른
+프로파일끼리도 상태가 자동 격리된다. `run` 시작 시 기존 상태가 없으면 "starting a
+fresh flow"를 명시 출력하므로, `--name` 오타로 빈 흐름이 새로 만들어져도 바로 보인다.
+실행 중간 산출물이므로 프로젝트의 `.gitignore`에 `.gralph/`를 넣기를 권장한다.
 
 ## 세션 흐름
 
@@ -93,8 +98,10 @@ gralph run profile.yaml
 에이전트 ── gralph do <command> --arg value ──▶ 노드의 Lua가 검증·라우팅·store 기록
 ```
 
-세션 안에서 프로파일 경로는 오케스트레이터가 주입한 `$GRALPH_PROFILE` 환경변수에서
-읽는다(`--profile`로 덮어쓸 수 있다).
+세션 안에서 프로파일 경로는 오케스트레이터가 주입한 `$GRALPH_PROFILE` 환경변수에서,
+인스턴스 이름은 `$GRALPH_INSTANCE_NAME`에서 읽는다(각각 `--profile`/`--name`으로
+덮어쓸 수 있다). 인스턴스 전파 덕에 세션 내 모든 `gralph` 호출이 오케스트레이터와
+같은 상태 디렉터리를 본다.
 
 커스텀 커맨드의 공통 계약:
 
@@ -112,8 +119,6 @@ gralph run profile.yaml
 ## 프로파일 YAML 레퍼런스
 
 ```yaml
-name: my-flow                                # (선택) 프로파일 식별자. 생략 시 파일명(확장자 제외).
-                                             # 기본 상태 디렉터리(.gralph/<name>)의 키가 된다
 agent:
   command: ["claude", "-p", "{{prompt}}"]   # 비대화형 에이전트 실행 커맨드
   timeout: 30m                               # (선택) 세션 제한 시간 (Go duration 문자열).
@@ -122,8 +127,8 @@ agent:
 prompt: |                                    # 랄프 프롬프트 (생략 시 기본문)
   1. `gralph next`로 다음 할 일을 안내받아라.
   2. 커맨드 응답에서 세션 종료 지시를 받으면 세션을 종료하라.
-state_dir: .gralph/my-flow                   # (선택) 상태 디렉터리 오버라이드 (프로파일 기준
-                                             # 상대경로). 생략 시 .gralph/<name>
+state_dir: my-state                          # (선택) 상태 디렉터리 오버라이드 (프로파일 기준
+                                             # 상대경로). 생략 시 .gralph/<인스턴스 이름>
 fail_threshold: 5                            # 매 n회째 실패에 세션 종료
 lua_timeout: 30s                             # (선택) Lua 스크립트 제한 시간 기본값.
                                              # 초과 시 SCRIPT ERROR로 실패 카운트. 생략 시 무제한
@@ -348,7 +353,7 @@ go build -o example/gralph . && cd example
 
 ### 상태 디렉터리 파일
 
-`<state_dir>`은 기본 `.gralph/<프로파일 name>/`이다. 구버전 기본값(`.gralph-state/`)에
+`<state_dir>`은 기본 `.gralph/<인스턴스 이름>/`이다. 구버전 기본값(`.gralph-state/`)에
 상태가 남아 있으면 로더가 마이그레이션 안내와 함께 실행을 거부한다(엔트리부터의
 조용한 재시작 방지). `state_dir`을 명시하면 그 경로가 그대로 쓰인다.
 
