@@ -217,7 +217,8 @@ cursor X`) to confirm the path and routing.
 ## Reference map
 
 - `reference/execution-model.md` — orchestrator/session contract, two state
-  files, commit-on-success, threshold math, cursor-advance table, gotchas.
+  files, commit-on-success, threshold math, cursor-advance table, the
+  usage-limit wrapper pattern for subscription agents, gotchas.
 - `reference/profile-yaml.md` — complete YAML schema, defaults, validation.
 - `reference/lua-bridge.md` — the `gralph.*` API, value conversion, and the
   **empirically verified** `os.execute`/`io.popen`/`io.open` idioms.

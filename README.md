@@ -328,6 +328,50 @@ gralph run --max-iterations N profile.yaml   # 플래그가 앞에 와도 동일
   `[gralph] interrupted at iteration N (cursor: X)` 형태로 stderr에 보고한 뒤 종료한다.
   커서는 보존되므로 `gralph run`을 다시 실행하면 중단 지점부터 이어진다.
 
+### 에이전트 사용량 한도(rate limit) 대응
+
+`claude -p` 같은 구독형 에이전트는 사용량 한도(예: 5시간 롤링 윈도우)에 걸리면 한도
+메시지만 찍고 즉시 비정상 종료한다. 오케스트레이터는 이를 일반 비정상 종료와 구분하지
+않으므로, 위의 백오프(최대 30s)로 5회 재시도한 뒤 **1분 남짓 만에 `giving up`으로
+종료된다** — 한도 리셋을 기다려주지 않는다. 커서·상태는 보존되니 리셋 후 `gralph run`을
+다시 실행하면 그대로 이어지지만, 무인 운행이 필요하면 `agent.command`를 래퍼 스크립트로
+감싸 한도를 래퍼 안에서 흡수하는 패턴을 권장한다:
+
+```yaml
+agent:
+  command: ["./agent.sh", "{{prompt}}"]
+```
+
+```sh
+#!/usr/bin/env bash
+# agent.sh — claude -p 래퍼: 사용량 한도를 감지하면 잠시 대기 후 exit 0 해서,
+# 루프의 연속 실패 예산(5회)을 소모하지 않고 다음 반복에서 재시도하게 한다.
+set -uo pipefail
+
+out=$(claude -p "$1" 2>&1)
+status=$?
+printf '%s\n' "$out"
+
+if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -qiE 'usage limit|rate limit'; then
+  echo "[agent.sh] usage limit detected; sleeping 10m before retrying" >&2
+  sleep 600
+  exit 0   # 정상 종료로 보고: 루프가 실패 카운트 없이 새 세션을 기동한다
+fi
+exit "$status"
+```
+
+설계 포인트:
+
+- **대기는 반드시 래퍼 안에서.** exit 0이고 커서가 안 움직이면 루프는 백오프 없이
+  즉시 다음 반복을 돌므로, sleep 없이 exit 0만 하면 핫루프가 된다.
+- **짧게 자고 exit 0을 반복**하면 한도가 풀릴 때까지 "기동 → 거부 → 10분 대기" 사이클이
+  돈다. 거부된 호출은 작업을 소모하지 않으므로 무해하고, 한도 메시지의 리셋 시각을
+  파싱해 그때까지 자도록 고도화해도 된다.
+- **`agent.timeout`과의 상호작용**: 타임아웃을 설정했다면 래퍼의 대기 시간이 그 안에
+  들어가야 한다 — 초과하면 래퍼가 죽고 비정상 종료로 카운트된다.
+- **한도 외의 실패는 exit code를 그대로 통과**시켜, 진짜 장애에서는 루프의
+  백오프·연속 5회 중단 로직이 정상 동작하게 둔다.
+
 ## 예제
 
 예제 둘 다 실제 에이전트 대신 행동을 흉내 내는 가짜 에이전트(`test/agent.sh`)를 쓴다.
