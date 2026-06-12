@@ -171,8 +171,10 @@ func TestReservedArgNames(t *testing.T) {
 	}
 }
 
-// A flow whose state still lives in the pre-name ".gralph-state" default must
-// not silently restart from the entry node; the loader demands a migration.
+// A flow whose state still lives in the pre-instance ".gralph-state" default
+// must not silently restart from the entry node. The guard is a runtime check
+// (CheckLegacyState), not part of loading, so static commands (validate,
+// graph) still load cleanly while run/session commands refuse to proceed.
 func TestLegacyStateDirGuard(t *testing.T) {
 	dir := t.TempDir()
 	pp := filepath.Join(dir, "profile.yaml")
@@ -185,8 +187,13 @@ func TestLegacyStateDirGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadProfile(pp)
-	if err == nil || !strings.Contains(err.Error(), "legacy state") {
+	// Loading stays clean (lint/graph must not depend on on-disk state)...
+	p, err := LoadProfile(pp)
+	if err != nil {
+		t.Fatalf("load must not trip the guard, got %v", err)
+	}
+	// ...but operating on the state dir does.
+	if err := p.CheckLegacyState(); err == nil || !strings.Contains(err.Error(), "legacy state") {
 		t.Fatalf("want legacy-state error, got %v", err)
 	}
 
@@ -194,8 +201,12 @@ func TestLegacyStateDirGuard(t *testing.T) {
 	if err := st.Save(filepath.Join(dir, ".gralph", "profile")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadProfile(pp); err != nil {
-		t.Fatalf("migrated profile must load, got %v", err)
+	p, err = LoadProfile(pp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CheckLegacyState(); err != nil {
+		t.Fatalf("migrated flow must pass the guard, got %v", err)
 	}
 
 	// An explicit state_dir opts out of the guard entirely.
@@ -203,8 +214,11 @@ func TestLegacyStateDirGuard(t *testing.T) {
 	if err := os.WriteFile(pp2, []byte("state_dir: .gralph-state\ncommands:\n  - name: a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := LoadProfile(pp2)
+	p, err = LoadProfile(pp2)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CheckLegacyState(); err != nil {
 		t.Fatalf("explicit state_dir must bypass the guard, got %v", err)
 	}
 	if p.StateDir != legacy {

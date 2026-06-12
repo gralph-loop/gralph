@@ -121,6 +121,10 @@ type Profile struct {
 	Dir string `yaml:"-"`
 	// Path is the absolute path of the profile file (not from YAML).
 	Path string `yaml:"-"`
+	// stateDirDefaulted records whether StateDir was derived from the
+	// instance name (vs set explicitly in YAML), so CheckLegacyState knows
+	// the .gralph-state migration guard applies.
+	stateDirDefaulted bool
 	// luaTimeout is LuaTimeout parsed at load time (not from YAML).
 	luaTimeout time.Duration
 }
@@ -160,17 +164,12 @@ func LoadProfileAs(path, instance string) (*Profile, error) {
 	if err := validateInstanceName(p.Name); err != nil {
 		return nil, err
 	}
-	defaultedStateDir := p.StateDir == ""
-	if defaultedStateDir {
+	p.stateDirDefaulted = p.StateDir == ""
+	if p.stateDirDefaulted {
 		p.StateDir = filepath.Join(".gralph", p.Name)
 	}
 	if !filepath.IsAbs(p.StateDir) {
 		p.StateDir = filepath.Join(p.Dir, p.StateDir)
-	}
-	if defaultedStateDir {
-		if err := checkLegacyStateDir(&p); err != nil {
-			return nil, err
-		}
 	}
 	if p.FailThreshold <= 0 {
 		p.FailThreshold = DefaultFailThreshold
@@ -197,22 +196,54 @@ func LoadProfileAs(path, instance string) (*Profile, error) {
 	return &p, nil
 }
 
+// reservedWindowsNames are device names Windows refuses as a path component,
+// matched case-insensitively, with or without an extension.
+var reservedWindowsNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
 // validateInstanceName guards the instance name's use as a state-dir path
-// component: it must stay a single, non-special component. Derived names
-// (filename stems) normally pass; an odd one is reported with the fix.
+// component: it must be a single, portable directory name. Derived names
+// (filename stems) normally pass; an odd --name is rejected up front with a
+// clear message instead of a cryptic os.MkdirAll failure later. The rules are
+// the strict (Windows) superset so a flow stays portable across platforms.
 func validateInstanceName(name string) error {
-	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+	bad := name == "" || name == "." || name == ".." ||
+		strings.ContainsAny(name, `/\:*?"<>|`) ||
+		strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ")
+	for _, r := range name {
+		if r < 0x20 { // control characters
+			bad = true
+			break
+		}
+	}
+	stem := strings.ToLower(name)
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	if reservedWindowsNames[stem] {
+		bad = true
+	}
+	if bad {
 		return fmt.Errorf("instance name %q is not usable as a directory name; pass a valid --name", name)
 	}
 	return nil
 }
 
-// checkLegacyStateDir refuses to run when a flow's state still lives in the
-// pre-name default ".gralph-state": silently starting an empty ".gralph/<name>"
-// would restart the graph from its entry node. Only consulted when state_dir
-// was defaulted -- an explicit state_dir is always authoritative -- and only
-// until state exists at the new location.
-func checkLegacyStateDir(p *Profile) error {
+// CheckLegacyState refuses to operate when this flow's state still lives in
+// the pre-instance default ".gralph-state": silently using an empty
+// ".gralph/<instance>" would restart the graph from its entry node. A no-op
+// when state_dir was set explicitly (always authoritative) or once state
+// exists at the resolved location. Inspection-only commands (validate, graph)
+// skip it; commands that read or write the state dir call it after loading.
+func (p *Profile) CheckLegacyState() error {
+	if !p.stateDirDefaulted {
+		return nil
+	}
 	legacy := filepath.Join(p.Dir, ".gralph-state")
 	if _, err := os.Stat(statePath(legacy)); err != nil {
 		return nil // no legacy state to lose
@@ -220,11 +251,18 @@ func checkLegacyStateDir(p *Profile) error {
 	if _, err := os.Stat(statePath(p.StateDir)); err == nil {
 		return nil // already migrated; the leftover legacy dir is inert
 	}
-	return fmt.Errorf(`profile: found legacy state in %s while the default state dir is now %s
-migrate it:    mv %s %s
-or keep it:    set "state_dir: .gralph-state" in the profile
-or discard it: rm -rf %s`,
-		legacy, p.StateDir, legacy, p.StateDir, legacy)
+	// The legacy dir can't be attributed to a specific instance, so hedge:
+	// migrating is right only if that state belongs to *this* flow.
+	return fmt.Errorf(`instance %q: found legacy state in %s, but this flow's state dir is now %s.
+If that state belongs to this flow, migrate it:
+    mkdir -p %s && mv %s %s
+Otherwise pin this profile to the old dir:
+    set "state_dir: .gralph-state" in the profile
+Or discard the old state:
+    rm -rf %s`,
+		p.Name, legacy, p.StateDir,
+		filepath.Dir(p.StateDir), legacy, p.StateDir,
+		legacy)
 }
 
 // parseTimeout parses an optional Go duration string from the profile.
