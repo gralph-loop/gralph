@@ -7,6 +7,7 @@ directory**.
 ## Top level
 
 ```yaml
+name: my-flow                   # optional; default: profile filename without extension
 agent:
   command: ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"]
   timeout: 30m                  # optional; kill the session past this (Go duration)
@@ -15,7 +16,7 @@ prompt: |                       # optional; a sensible default is used if omitte
   1. Run "gralph next" to receive the gralph command you must eventually run.
   2. Do whatever is needed to be able to run it, then run it with its arguments.
   3. Whenever a command's response says to end the session, end it immediately.
-state_dir: .gralph-state        # optional; default ".gralph-state" (relative to profile)
+state_dir: .gralph/my-flow      # optional; default ".gralph/<name>" (relative to profile)
 fail_threshold: 5               # optional; default 5; every n-th failure recycles the session
 lua_timeout: 30s                # optional; default lua gate time limit (per-command override)
 commands:                       # required; ≥1
@@ -27,7 +28,8 @@ commands:                       # required; ≥1
 | `agent.command` | for `gralph run` | — | argv list; every element may contain `{{prompt}}`, replaced with the ralph prompt. Not needed for in-session subcommands, but required to run the loop. |
 | `agent.timeout` | no | none | Go duration string. A session exceeding it is killed (SIGTERM, then hard kill) and retried like any abnormal agent exit. |
 | `prompt` | no | built-in default | The ralph prompt handed to the agent each session. |
-| `state_dir` | no | `.gralph-state` | Where `state.json` + `store.json` live. Relative paths resolve against the profile dir. |
+| `name` | no | filename stem | Identifies this profile's flow and keys the default state dir, so several profiles in one workspace stay isolated. Must be a single path component (no `/`, `\`, `.`, `..`). |
+| `state_dir` | no | `.gralph/<name>` | Where `state.json` + `store.json` live. Relative paths resolve against the profile dir. The loader refuses to run when state from the legacy default (`.gralph-state`) would be silently abandoned; it prints the migration `mv`. |
 | `fail_threshold` | no | `5` | Profile-wide failure threshold (per-command override available). Must be > 0. |
 | `lua_timeout` | no | none | Go duration string; aborts a gate that runs longer (SCRIPT ERROR, counts toward the threshold). Per-command override available. |
 | `commands` | yes | — | The graph nodes, in order. `commands[0]` is the entry node. |

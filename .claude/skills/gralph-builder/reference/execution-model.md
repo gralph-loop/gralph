@@ -122,7 +122,9 @@ budget is **per session**, not global.
 
 ## State: two files, two owners
 
-Under `state_dir` (default `.gralph-state`, resolved relative to the profile):
+Under `state_dir` (default `.gralph/<profile name>`, resolved relative to the
+profile; the name defaults to the profile filename stem, so profiles sharing a
+workspace get isolated state automatically):
 
 - **`state.json`** — framework-internal, off-limits to your Lua. Holds `cursor`,
   `session_id`, and per-command `failures`. You never read or write this from

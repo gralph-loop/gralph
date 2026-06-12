@@ -85,8 +85,105 @@ func TestProfileDefaults(t *testing.T) {
 	if p.Prompt != DefaultPrompt {
 		t.Fatal("prompt default not applied")
 	}
-	if !filepath.IsAbs(p.StateDir) || filepath.Base(p.StateDir) != ".gralph-state" {
-		t.Fatalf("state_dir default = %q", p.StateDir)
+	// writeProfile writes "profile.yaml", so the derived name is "profile"
+	// and the default state dir is keyed by it: ".gralph/profile".
+	if p.Name != "profile" {
+		t.Fatalf("name default = %q, want %q", p.Name, "profile")
+	}
+	want := filepath.Join(".gralph", "profile")
+	if !filepath.IsAbs(p.StateDir) || !strings.HasSuffix(p.StateDir, want) {
+		t.Fatalf("state_dir default = %q, want suffix %q", p.StateDir, want)
+	}
+}
+
+// Profile names key the default state dir, so two profiles in one workspace
+// are isolated without anyone setting state_dir.
+func TestProfileNameKeysStateDir(t *testing.T) {
+	dir := t.TempDir()
+	write := func(file, yaml string) *Profile {
+		t.Helper()
+		pp := filepath.Join(dir, file)
+		if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p, err := LoadProfile(pp)
+		if err != nil {
+			t.Fatalf("LoadProfile(%s): %v", file, err)
+		}
+		return p
+	}
+
+	a := write("build.yaml", "commands:\n  - name: a\n")
+	b := write("review.yaml", "name: nightly\ncommands:\n  - name: a\n")
+	if a.StateDir != filepath.Join(dir, ".gralph", "build") {
+		t.Fatalf("derived-name state dir = %q", a.StateDir)
+	}
+	if b.StateDir != filepath.Join(dir, ".gralph", "nightly") {
+		t.Fatalf("explicit-name state dir = %q", b.StateDir)
+	}
+	if a.StateDir == b.StateDir {
+		t.Fatal("two profiles in one dir must not share a default state dir")
+	}
+
+	// An explicit state_dir stays authoritative regardless of the name.
+	c := write("third.yaml", "name: nightly\nstate_dir: custom-state\ncommands:\n  - name: a\n")
+	if c.StateDir != filepath.Join(dir, "custom-state") {
+		t.Fatalf("explicit state_dir = %q", c.StateDir)
+	}
+}
+
+func TestProfileNameMustBePathComponent(t *testing.T) {
+	for _, name := range []string{"a/b", `a\b`, ".", ".."} {
+		pp := filepath.Join(t.TempDir(), "profile.yaml")
+		// Single-quoted YAML: no escape processing, so backslashes survive.
+		yaml := "name: '" + name + "'\ncommands:\n  - name: a\n"
+		if err := os.WriteFile(pp, []byte(yaml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadProfile(pp); err == nil || !strings.Contains(err.Error(), "not usable as a directory name") {
+			t.Fatalf("name %q: want directory-name error, got %v", name, err)
+		}
+	}
+}
+
+// A flow whose state still lives in the pre-name ".gralph-state" default must
+// not silently restart from the entry node; the loader demands a migration.
+func TestLegacyStateDirGuard(t *testing.T) {
+	dir := t.TempDir()
+	pp := filepath.Join(dir, "profile.yaml")
+	if err := os.WriteFile(pp, []byte("commands:\n  - name: a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(dir, ".gralph-state")
+	st := &State{Cursor: "a", Failures: map[string]int{}}
+	if err := st.Save(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadProfile(pp)
+	if err == nil || !strings.Contains(err.Error(), "legacy state") {
+		t.Fatalf("want legacy-state error, got %v", err)
+	}
+
+	// Once state exists at the new location the leftover legacy dir is inert.
+	if err := st.Save(filepath.Join(dir, ".gralph", "profile")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadProfile(pp); err != nil {
+		t.Fatalf("migrated profile must load, got %v", err)
+	}
+
+	// An explicit state_dir opts out of the guard entirely.
+	pp2 := filepath.Join(dir, "keep.yaml")
+	if err := os.WriteFile(pp2, []byte("state_dir: .gralph-state\ncommands:\n  - name: a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadProfile(pp2)
+	if err != nil {
+		t.Fatalf("explicit state_dir must bypass the guard, got %v", err)
+	}
+	if p.StateDir != legacy {
+		t.Fatalf("explicit state_dir = %q, want %q", p.StateDir, legacy)
 	}
 }
 

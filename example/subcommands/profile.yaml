@@ -11,7 +11,7 @@ agent:
   # an agent with parallel sub-agent support.
   command: ["bash", "test/agent.sh", "{{prompt}}"]
 
-state_dir: .gralph-state
+name: subcommands
 fail_threshold: 5
 
 commands:

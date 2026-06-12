@@ -42,7 +42,7 @@ Expected path (from the orchestrator's stderr):
 spec → implement → verify (→fix) → fix → verify (→release) → release → DONE  (6 iterations)
 ```
 
-After it finishes, `.gralph-state/store.json` holds the accumulated evidence:
+After it finishes, `.gralph/tdd-loop/store.json` holds the accumulated evidence:
 `feature`, `files`, `passes`, `last_fix`, `released`.
 
 ## What to copy into a real workflow

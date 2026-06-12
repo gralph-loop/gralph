@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -100,6 +101,11 @@ type AgentSpec struct {
 
 // Profile is the user-supplied YAML profile.
 type Profile struct {
+	// Name identifies this profile's flow; the default state dir is keyed by
+	// it (".gralph/<name>"), so several profiles in one workspace stay
+	// isolated without anyone touching state_dir. Defaults to the profile
+	// filename without its extension.
+	Name          string        `yaml:"name"`
 	Agent         AgentSpec     `yaml:"agent"`
 	Prompt        string        `yaml:"prompt"`
 	StateDir      string        `yaml:"state_dir"`
@@ -140,11 +146,24 @@ func LoadProfile(path string) (*Profile, error) {
 	}
 	p.Path = abs
 	p.Dir = filepath.Dir(abs)
-	if p.StateDir == "" {
-		p.StateDir = ".gralph-state"
+	if p.Name == "" {
+		base := filepath.Base(abs)
+		p.Name = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	if err := validateProfileName(p.Name); err != nil {
+		return nil, err
+	}
+	defaultedStateDir := p.StateDir == ""
+	if defaultedStateDir {
+		p.StateDir = filepath.Join(".gralph", p.Name)
 	}
 	if !filepath.IsAbs(p.StateDir) {
 		p.StateDir = filepath.Join(p.Dir, p.StateDir)
+	}
+	if defaultedStateDir {
+		if err := checkLegacyStateDir(&p); err != nil {
+			return nil, err
+		}
 	}
 	if p.FailThreshold <= 0 {
 		p.FailThreshold = DefaultFailThreshold
@@ -169,6 +188,36 @@ func LoadProfile(path string) (*Profile, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+// validateProfileName guards the name's use as a state-dir path component:
+// it must stay a single, non-special component. Derived names (filename
+// stems) normally pass; an odd filename is reported with the fix.
+func validateProfileName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("profile: name %q is not usable as a directory name; set an explicit `name:` in the profile", name)
+	}
+	return nil
+}
+
+// checkLegacyStateDir refuses to run when a flow's state still lives in the
+// pre-name default ".gralph-state": silently starting an empty ".gralph/<name>"
+// would restart the graph from its entry node. Only consulted when state_dir
+// was defaulted -- an explicit state_dir is always authoritative -- and only
+// until state exists at the new location.
+func checkLegacyStateDir(p *Profile) error {
+	legacy := filepath.Join(p.Dir, ".gralph-state")
+	if _, err := os.Stat(statePath(legacy)); err != nil {
+		return nil // no legacy state to lose
+	}
+	if _, err := os.Stat(statePath(p.StateDir)); err == nil {
+		return nil // already migrated; the leftover legacy dir is inert
+	}
+	return fmt.Errorf(`profile: found legacy state in %s while the default state dir is now %s
+migrate it:    mv %s %s
+or keep it:    set "state_dir: .gralph-state" in the profile
+or discard it: rm -rf %s`,
+		legacy, p.StateDir, legacy, p.StateDir, legacy)
 }
 
 // parseTimeout parses an optional Go duration string from the profile.
