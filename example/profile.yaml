@@ -13,7 +13,6 @@ prompt: |
   2. Your job is to do whatever is necessary to be able to run that gralph command — figure out and carry out the work that running it requires. Once you've done that, run the instructed gralph command with its arguments.
   3. Whenever a gralph command's response tells you to end the session, end the session immediately.
 
-state_dir: .gralph-state
 fail_threshold: 5
 
 commands:

@@ -15,7 +15,8 @@ import (
 const usage = `gralph - ralph loop orchestrator
 
 Usage:
-  gralph run <profile.yaml> [--max-iterations N]    run the ralph loop (orchestrator)
+  gralph run <profile.yaml> [--name <instance>] [--max-iterations N]
+                                                    run the ralph loop (orchestrator)
   gralph next [--profile <profile.yaml>]            (agent) get current task guidance
   gralph do <command> [--profile p] [--arg v ...]   (agent) run a YAML-defined custom command
   gralph status [--profile p] [--json]              show cursor, session, failures, quota progress
@@ -24,8 +25,13 @@ Usage:
   gralph try <command> [--profile p] [--arg v ...]  dry-run a gate: no cursor check, nothing committed
   gralph version                                    print version (from Go build info)
 
-Inside an agent session the profile path is taken from $GRALPH_PROFILE
-(set automatically by the orchestrator) unless --profile is given.
+One profile can drive several isolated flows: --name picks the instance
+(default: the profile filename without extension), and the instance keys the
+default state dir (.gralph/<instance>). Every subcommand above accepts --name.
+
+Inside an agent session the profile path is taken from $GRALPH_PROFILE and the
+instance name from $GRALPH_INSTANCE_NAME (both set automatically by the
+orchestrator) unless --profile / --name are given.
 `
 
 func main() {
@@ -42,12 +48,19 @@ func main() {
 		fmt.Println(versionString())
 
 	case "run":
-		profilePath, maxIter, err := parseRunArgs(os.Args[2:])
+		profilePath, instance, maxIter, err := parseRunArgs(os.Args[2:])
 		if err != nil {
 			fatal(err)
 		}
-		p, err := LoadProfile(profilePath)
+		// run is the orchestrator entry point, not a session subcommand, so it
+		// honors only an explicit --name -- never $GRALPH_INSTANCE_NAME, which
+		// the orchestrator itself exports into agent sessions (a nested
+		// `gralph run` must key off its own profile, not the parent's flow).
+		p, err := LoadProfileAs(profilePath, instance)
 		if err != nil {
+			fatal(err)
+		}
+		if err := p.CheckLegacyState(); err != nil {
 			fatal(err)
 		}
 		// SIGINT/SIGTERM cancel the context; the loop forwards the signal to
@@ -61,6 +74,7 @@ func main() {
 	case "graph":
 		fs := flag.NewFlagSet("graph", flag.ExitOnError)
 		withState := fs.Bool("state", false, "highlight the current cursor from the state dir")
+		instance := fs.String("name", "", "instance name (default: profile filename stem)")
 		args := os.Args[2:]
 		// allow `gralph graph profile.yaml --state`
 		var profilePath string
@@ -73,9 +87,9 @@ func main() {
 			profilePath = fs.Arg(0)
 		}
 		if profilePath == "" {
-			fatal(fmt.Errorf("usage: gralph graph <profile.yaml> [--state]"))
+			fatal(fmt.Errorf("usage: gralph graph <profile.yaml> [--state] [--name <instance>]"))
 		}
-		p, err := LoadProfile(profilePath)
+		p, err := LoadProfileAs(profilePath, resolveInstanceName(*instance))
 		if err != nil {
 			fatal(err)
 		}
@@ -204,16 +218,17 @@ func runDo(name string, args []string) {
 //
 //	gralph run profile.yaml --max-iterations N
 //	gralph run --max-iterations N profile.yaml
-func parseRunArgs(args []string) (profilePath string, maxIterations int, err error) {
+func parseRunArgs(args []string) (profilePath, instance string, maxIterations int, err error) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	maxIter := fs.Int("max-iterations", 0, "stop after N iterations (0 = unlimited)")
+	name := fs.String("name", "", "instance name (default: profile filename stem)")
 	// path-first form
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		profilePath = args[0]
 		args = args[1:]
 	}
 	if err := fs.Parse(args); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	// flags-first form: recover the positional argument left over after
 	// flag parsing.
@@ -222,15 +237,27 @@ func parseRunArgs(args []string) (profilePath string, maxIterations int, err err
 		profilePath, rest = rest[0], rest[1:]
 	}
 	if profilePath == "" || len(rest) > 0 {
-		return "", 0, fmt.Errorf("usage: gralph run <profile.yaml> [--max-iterations N]")
+		return "", "", 0, fmt.Errorf("usage: gralph run <profile.yaml> [--name <instance>] [--max-iterations N]")
 	}
-	return profilePath, *maxIter, nil
+	return profilePath, *name, *maxIter, nil
 }
 
-// profileFromSessionArgs extracts an optional leading/inline --profile flag,
-// falling back to $GRALPH_PROFILE.
+// resolveInstanceName resolves the effective instance name from an optional
+// --name value, falling back to $GRALPH_INSTANCE_NAME (set by the
+// orchestrator inside agent sessions). Empty means the loader's default,
+// the profile filename stem.
+func resolveInstanceName(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv("GRALPH_INSTANCE_NAME")
+}
+
+// profileFromSessionArgs extracts the optional inline --profile and --name
+// flags, falling back to $GRALPH_PROFILE / $GRALPH_INSTANCE_NAME.
 func profileFromSessionArgs(args []string) (*Profile, []string, error) {
 	path := os.Getenv("GRALPH_PROFILE")
+	instance := ""
 	rest := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -242,6 +269,14 @@ func profileFromSessionArgs(args []string) (*Profile, []string, error) {
 			path = args[i]
 		case len(args[i]) > 10 && args[i][:10] == "--profile=":
 			path = args[i][10:]
+		case args[i] == "--name":
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf("missing value for --name")
+			}
+			i++
+			instance = args[i]
+		case len(args[i]) > 7 && args[i][:7] == "--name=":
+			instance = args[i][7:]
 		default:
 			rest = append(rest, args[i])
 		}
@@ -249,8 +284,13 @@ func profileFromSessionArgs(args []string) (*Profile, []string, error) {
 	if path == "" {
 		return nil, nil, fmt.Errorf("no profile: set $GRALPH_PROFILE or pass --profile <profile.yaml>")
 	}
-	p, err := LoadProfile(path)
+	p, err := LoadProfileAs(path, resolveInstanceName(instance))
 	if err != nil {
+		return nil, nil, err
+	}
+	// These commands operate on the resolved state dir, so they must not
+	// silently land on an empty one while legacy state sits in .gralph-state.
+	if err := p.CheckLegacyState(); err != nil {
 		return nil, nil, err
 	}
 	return p, rest, nil

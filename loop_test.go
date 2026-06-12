@@ -414,6 +414,85 @@ exit 0
 	}
 }
 
+// TestLoopInjectsInstanceName pins the orchestrator->session contract that
+// makes isolation work: the agent must see $GRALPH_INSTANCE_NAME /
+// $GRALPH_PROFILE, so an in-session `gralph do` lands on the SAME state dir as
+// the orchestrator (no split-brain). The loop runs under a non-default
+// instance and the test asserts both the injected env and that the recorded
+// progress actually went to .gralph/<instance>.
+func TestLoopInjectsInstanceName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("e2e agent script needs bash")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+
+	bin := buildGralph(t)
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("profile.yaml", `agent:
+  command: ["bash", "agent.sh"]
+commands:
+  - name: implement
+    guidance: |
+      RUN: gralph do implement
+`)
+	// The fake agent records the env the orchestrator handed it, then runs the
+	// in-session command WITHOUT any --profile/--name -- it must rely purely on
+	// the injected env to find the right profile and instance.
+	write("agent.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -u
+GRALPH=%q
+printf '%%s' "${GRALPH_INSTANCE_NAME-<unset>}" > instance.txt
+printf '%%s' "${GRALPH_PROFILE-<unset>}" > profile-env.txt
+"$GRALPH" do implement >/dev/null
+exit 0
+`, bin))
+
+	p, err := LoadProfileAs(filepath.Join(dir, "profile.yaml"), "feat-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runLoop(context.Background(), p, 2); err != nil {
+		t.Fatalf("runLoop: %v", err)
+	}
+
+	readMarker := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("agent marker %s missing: %v", name, err)
+		}
+		return string(b)
+	}
+	if got := readMarker("instance.txt"); got != "feat-x" {
+		t.Fatalf("GRALPH_INSTANCE_NAME seen by agent = %q, want %q", got, "feat-x")
+	}
+	if got := readMarker("profile-env.txt"); got != p.Path {
+		t.Fatalf("GRALPH_PROFILE seen by agent = %q, want %q", got, p.Path)
+	}
+	// The in-session `do implement` advanced the cursor in the instance's own
+	// state dir -- proof the subcommand resolved the same dir as the loop.
+	if filepath.Base(p.StateDir) != "feat-x" {
+		t.Fatalf("instance state dir = %q, want basename feat-x", p.StateDir)
+	}
+	st, err := LoadState(p.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Cursor != DoneCursor {
+		t.Fatalf("cursor = %q in %s, want DONE (in-session write went elsewhere?)", st.Cursor, p.StateDir)
+	}
+}
+
 // TestAgentOverrideValidation: a node-level agent override with an empty
 // command must be rejected at profile load time.
 func TestAgentOverrideValidation(t *testing.T) {

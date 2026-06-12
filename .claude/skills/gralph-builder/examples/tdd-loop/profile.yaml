@@ -18,7 +18,6 @@ prompt: |
   2. Do whatever is needed to be able to run it, then run it with its arguments.
   3. Whenever a command's response says to end the session, end it immediately.
 
-state_dir: .gralph-state
 fail_threshold: 4
 
 commands:

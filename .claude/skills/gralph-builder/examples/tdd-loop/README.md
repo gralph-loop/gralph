@@ -42,7 +42,8 @@ Expected path (from the orchestrator's stderr):
 spec → implement → verify (→fix) → fix → verify (→release) → release → DONE  (6 iterations)
 ```
 
-After it finishes, `.gralph-state/store.json` holds the accumulated evidence:
+After it finishes, `.gralph/profile/store.json` holds the accumulated evidence
+(`profile` is the default instance name, derived from `profile.yaml`):
 `feature`, `files`, `passes`, `last_fix`, `released`.
 
 ## What to copy into a real workflow

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -110,10 +111,20 @@ type Profile struct {
 	// lua_timeout. Empty means no timeout.
 	LuaTimeout string `yaml:"lua_timeout"`
 
+	// Name is the instance name: which flow's state this process operates
+	// on. The default state dir is keyed by it (".gralph/<name>"), so one
+	// profile definition can drive several isolated flows. Resolved at load
+	// time from --name / $GRALPH_INSTANCE_NAME, defaulting to the profile
+	// filename without its extension -- never from the YAML itself.
+	Name string `yaml:"-"`
 	// Dir is the directory containing the profile file (not from YAML).
 	Dir string `yaml:"-"`
 	// Path is the absolute path of the profile file (not from YAML).
 	Path string `yaml:"-"`
+	// stateDirDefaulted records whether StateDir was derived from the
+	// instance name (vs set explicitly in YAML), so CheckLegacyState knows
+	// the .gralph-state migration guard applies.
+	stateDirDefaulted bool
 	// luaTimeout is LuaTimeout parsed at load time (not from YAML).
 	luaTimeout time.Duration
 }
@@ -124,8 +135,13 @@ const DefaultPrompt = `You are running inside a gralph (ralph loop) session.
 2. Your job is to do whatever is necessary to be able to run that gralph command — figure out and carry out the work that running it requires. Once you've done that, run the instructed gralph command with its arguments.
 3. Whenever a gralph command's response tells you to end the session, end the session immediately.`
 
-// LoadProfile reads, defaults and validates a profile.
-func LoadProfile(path string) (*Profile, error) {
+// LoadProfile reads, defaults and validates a profile under the default
+// instance name (the profile filename without its extension).
+func LoadProfile(path string) (*Profile, error) { return LoadProfileAs(path, "") }
+
+// LoadProfileAs is LoadProfile for an explicit instance name; empty means
+// the default.
+func LoadProfileAs(path, instance string) (*Profile, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -140,8 +156,17 @@ func LoadProfile(path string) (*Profile, error) {
 	}
 	p.Path = abs
 	p.Dir = filepath.Dir(abs)
-	if p.StateDir == "" {
-		p.StateDir = ".gralph-state"
+	p.Name = instance
+	if p.Name == "" {
+		base := filepath.Base(abs)
+		p.Name = strings.TrimSuffix(base, filepath.Ext(base))
+	}
+	if err := validateInstanceName(p.Name); err != nil {
+		return nil, err
+	}
+	p.stateDirDefaulted = p.StateDir == ""
+	if p.stateDirDefaulted {
+		p.StateDir = filepath.Join(".gralph", p.Name)
 	}
 	if !filepath.IsAbs(p.StateDir) {
 		p.StateDir = filepath.Join(p.Dir, p.StateDir)
@@ -171,6 +196,75 @@ func LoadProfile(path string) (*Profile, error) {
 	return &p, nil
 }
 
+// reservedWindowsNames are device names Windows refuses as a path component,
+// matched case-insensitively, with or without an extension.
+var reservedWindowsNames = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
+	"com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
+	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
+// validateInstanceName guards the instance name's use as a state-dir path
+// component: it must be a single, portable directory name. Derived names
+// (filename stems) normally pass; an odd --name is rejected up front with a
+// clear message instead of a cryptic os.MkdirAll failure later. The rules are
+// the strict (Windows) superset so a flow stays portable across platforms.
+func validateInstanceName(name string) error {
+	bad := name == "" || name == "." || name == ".." ||
+		strings.ContainsAny(name, `/\:*?"<>|`) ||
+		strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ")
+	for _, r := range name {
+		if r < 0x20 { // control characters
+			bad = true
+			break
+		}
+	}
+	stem := strings.ToLower(name)
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	if reservedWindowsNames[stem] {
+		bad = true
+	}
+	if bad {
+		return fmt.Errorf("instance name %q is not usable as a directory name; pass a valid --name", name)
+	}
+	return nil
+}
+
+// CheckLegacyState refuses to operate when this flow's state still lives in
+// the pre-instance default ".gralph-state": silently using an empty
+// ".gralph/<instance>" would restart the graph from its entry node. A no-op
+// when state_dir was set explicitly (always authoritative) or once state
+// exists at the resolved location. Inspection-only commands (validate, graph)
+// skip it; commands that read or write the state dir call it after loading.
+func (p *Profile) CheckLegacyState() error {
+	if !p.stateDirDefaulted {
+		return nil
+	}
+	legacy := filepath.Join(p.Dir, ".gralph-state")
+	if _, err := os.Stat(statePath(legacy)); err != nil {
+		return nil // no legacy state to lose
+	}
+	if _, err := os.Stat(statePath(p.StateDir)); err == nil {
+		return nil // already migrated; the leftover legacy dir is inert
+	}
+	// The legacy dir can't be attributed to a specific instance, so hedge:
+	// migrating is right only if that state belongs to *this* flow.
+	return fmt.Errorf(`instance %q: found legacy state in %s, but this flow's state dir is now %s.
+If that state belongs to this flow, migrate it:
+    mkdir -p %s && mv %s %s
+Otherwise pin this profile to the old dir:
+    set "state_dir: .gralph-state" in the profile
+Or discard the old state:
+    rm -rf %s`,
+		p.Name, legacy, p.StateDir,
+		filepath.Dir(p.StateDir), legacy, p.StateDir,
+		legacy)
+}
+
 // parseTimeout parses an optional Go duration string from the profile.
 // Empty means "no timeout" (zero duration).
 func parseTimeout(field, s string) (time.Duration, error) {
@@ -196,6 +290,23 @@ var reservedCommandNames = map[string]bool{
 	"do": true,
 }
 
+// reservedArgNames are arg names the CLI consumes for itself before a custom
+// command ever sees them (profileFromSessionArgs strips --profile / --name),
+// so declaring them would silently swallow the agent's value.
+var reservedArgNames = map[string]bool{
+	"profile": true,
+	"name":    true,
+}
+
+func validateArgSpecs(owner string, args []ArgSpec) error {
+	for _, a := range args {
+		if reservedArgNames[a.Name] {
+			return fmt.Errorf("profile: %s: arg %q is reserved (consumed by the gralph CLI itself)", owner, a.Name)
+		}
+	}
+	return nil
+}
+
 func (p *Profile) validate() error {
 	if len(p.Commands) == 0 {
 		return fmt.Errorf("profile: at least one command is required")
@@ -214,6 +325,9 @@ func (p *Profile) validate() error {
 		}
 		if _, dup := byName[c.Name]; dup {
 			return fmt.Errorf("profile: duplicate command name %q", c.Name)
+		}
+		if err := validateArgSpecs(fmt.Sprintf("command %q", c.Name), c.Args); err != nil {
+			return err
 		}
 		byName[c.Name] = c
 	}
@@ -240,6 +354,9 @@ func (p *Profile) validate() error {
 				return fmt.Errorf("profile: duplicate subcommand name %q (in %q and %q)", s.Name, parent, c.Name)
 			}
 			seenSub[s.Name] = c.Name
+			if err := validateArgSpecs(fmt.Sprintf("subcommand %q of %q", s.Name, c.Name), s.Args); err != nil {
+				return err
+			}
 			if s.Count <= 0 {
 				s.Count = 1
 			}

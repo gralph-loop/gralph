@@ -35,7 +35,7 @@ cd examples/tdd-loop
 gralph run profile.yaml --max-iterations 12
 ```
 
-Reset between runs with `rm -rf .gralph-state` (and the example's generated
+Reset between runs with `rm -rf .gralph` (and the example's generated
 files, e.g. `src/`, `changes.txt`, `NOTES.md`).
 
 ## Reading them
