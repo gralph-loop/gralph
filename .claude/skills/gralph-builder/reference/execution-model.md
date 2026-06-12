@@ -28,9 +28,57 @@ The agent process is launched with its working directory set to the profile's
 directory. The agent never observes the loop's termination — from its side every
 session looks identical. Orchestrator robustness: an unlaunchable agent binary
 aborts the loop immediately; consecutive abnormal exits without cursor progress
-back off exponentially and abort after 5; `agent.timeout` (if set) kills an
-overlong session and retries it like any abnormal exit; SIGINT/SIGTERM shut the
-loop down cleanly with the cursor preserved.
+back off exponentially (2s → 4s → … capped at 30s) and abort after 5;
+`agent.timeout` (if set) kills an overlong session and retries it like any
+abnormal exit; SIGINT/SIGTERM shut the loop down cleanly with the cursor
+preserved.
+
+## Agent usage limits (e.g. the `claude -p` 5-hour window)
+
+Subscription-billed agents refuse with an "usage limit reached" message and a
+non-zero exit when their quota window is exhausted. The orchestrator cannot
+tell that apart from any other abnormal exit, so it retries 5 times with the
+short backoff above and **gives up in about a minute** — it does not wait out
+the reset. The cursor and all state survive, so re-running `gralph run` after
+the window resets resumes exactly where it stopped.
+
+For unattended runs, absorb the limit in a wrapper script instead of pointing
+`agent.command` straight at the agent binary:
+
+```yaml
+agent:
+  command: ["./agent.sh", "{{prompt}}"]
+```
+
+```sh
+#!/usr/bin/env bash
+# agent.sh — on a usage limit, sleep briefly and exit 0 so the loop relaunches
+# without consuming its 5-consecutive-failure budget.
+set -uo pipefail
+
+out=$(claude -p "$1" 2>&1)
+status=$?
+printf '%s\n' "$out"
+
+if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -qiE 'usage limit|rate limit'; then
+  echo "[agent.sh] usage limit detected; sleeping 10m before retrying" >&2
+  sleep 600
+  exit 0   # reported as a clean exit: no failure counted, fresh session next
+fi
+exit "$status"
+```
+
+Design rules for the wrapper:
+
+- **The wait must live inside the wrapper.** On a clean exit with no cursor
+  progress the loop relaunches immediately with no backoff — exit 0 without a
+  sleep is a hot loop.
+- **Sleep in short chunks and exit 0** rather than sleeping until the reset in
+  one go: each "launch → refused → sleep 10m" cycle is harmless (a refused call
+  does no work), stays under any `agent.timeout`, and survives message-format
+  changes. Parsing the reset time out of the message is an optional refinement.
+- **Pass every other exit code through** so real failures still hit the loop's
+  backoff and 5-strike abort.
 
 ## What the agent does in a session
 
