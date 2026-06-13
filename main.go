@@ -60,9 +60,6 @@ func main() {
 		if err != nil {
 			fatal(err)
 		}
-		if err := p.CheckLegacyState(); err != nil {
-			fatal(err)
-		}
 		// SIGINT/SIGTERM cancel the context; the loop forwards the signal to
 		// the running agent, reports the preserved cursor and exits.
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -286,11 +283,6 @@ func profileFromSessionArgs(args []string) (*Profile, []string, error) {
 	}
 	p, err := LoadProfileAs(path, resolveInstanceName(instance))
 	if err != nil {
-		return nil, nil, err
-	}
-	// These commands operate on the resolved state dir, so they must not
-	// silently land on an empty one while legacy state sits in .gralph-state.
-	if err := p.CheckLegacyState(); err != nil {
 		return nil, nil, err
 	}
 	return p, rest, nil

@@ -171,61 +171,6 @@ func TestReservedArgNames(t *testing.T) {
 	}
 }
 
-// A flow whose state still lives in the pre-instance ".gralph-state" default
-// must not silently restart from the entry node. The guard is a runtime check
-// (CheckLegacyState), not part of loading, so static commands (validate,
-// graph) still load cleanly while run/session commands refuse to proceed.
-func TestLegacyStateDirGuard(t *testing.T) {
-	dir := t.TempDir()
-	pp := filepath.Join(dir, "profile.yaml")
-	if err := os.WriteFile(pp, []byte("commands:\n  - name: a\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	legacy := filepath.Join(dir, ".gralph-state")
-	st := &State{Cursor: "a", Failures: map[string]int{}}
-	if err := st.Save(legacy); err != nil {
-		t.Fatal(err)
-	}
-
-	// Loading stays clean (lint/graph must not depend on on-disk state)...
-	p, err := LoadProfile(pp)
-	if err != nil {
-		t.Fatalf("load must not trip the guard, got %v", err)
-	}
-	// ...but operating on the state dir does.
-	if err := p.CheckLegacyState(); err == nil || !strings.Contains(err.Error(), "legacy state") {
-		t.Fatalf("want legacy-state error, got %v", err)
-	}
-
-	// Once state exists at the new location the leftover legacy dir is inert.
-	if err := st.Save(filepath.Join(dir, ".gralph", "profile")); err != nil {
-		t.Fatal(err)
-	}
-	p, err = LoadProfile(pp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := p.CheckLegacyState(); err != nil {
-		t.Fatalf("migrated flow must pass the guard, got %v", err)
-	}
-
-	// An explicit state_dir opts out of the guard entirely.
-	pp2 := filepath.Join(dir, "keep.yaml")
-	if err := os.WriteFile(pp2, []byte("state_dir: .gralph-state\ncommands:\n  - name: a\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	p, err = LoadProfile(pp2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := p.CheckLegacyState(); err != nil {
-		t.Fatalf("explicit state_dir must bypass the guard, got %v", err)
-	}
-	if p.StateDir != legacy {
-		t.Fatalf("explicit state_dir = %q, want %q", p.StateDir, legacy)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
