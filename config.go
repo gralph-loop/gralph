@@ -121,10 +121,6 @@ type Profile struct {
 	Dir string `yaml:"-"`
 	// Path is the absolute path of the profile file (not from YAML).
 	Path string `yaml:"-"`
-	// stateDirDefaulted records whether StateDir was derived from the
-	// instance name (vs set explicitly in YAML), so CheckLegacyState knows
-	// the .gralph-state migration guard applies.
-	stateDirDefaulted bool
 	// luaTimeout is LuaTimeout parsed at load time (not from YAML).
 	luaTimeout time.Duration
 }
@@ -164,8 +160,7 @@ func LoadProfileAs(path, instance string) (*Profile, error) {
 	if err := validateInstanceName(p.Name); err != nil {
 		return nil, err
 	}
-	p.stateDirDefaulted = p.StateDir == ""
-	if p.stateDirDefaulted {
+	if p.StateDir == "" {
 		p.StateDir = filepath.Join(".gralph", p.Name)
 	}
 	if !filepath.IsAbs(p.StateDir) {
@@ -232,37 +227,6 @@ func validateInstanceName(name string) error {
 		return fmt.Errorf("instance name %q is not usable as a directory name; pass a valid --name", name)
 	}
 	return nil
-}
-
-// CheckLegacyState refuses to operate when this flow's state still lives in
-// the pre-instance default ".gralph-state": silently using an empty
-// ".gralph/<instance>" would restart the graph from its entry node. A no-op
-// when state_dir was set explicitly (always authoritative) or once state
-// exists at the resolved location. Inspection-only commands (validate, graph)
-// skip it; commands that read or write the state dir call it after loading.
-func (p *Profile) CheckLegacyState() error {
-	if !p.stateDirDefaulted {
-		return nil
-	}
-	legacy := filepath.Join(p.Dir, ".gralph-state")
-	if _, err := os.Stat(statePath(legacy)); err != nil {
-		return nil // no legacy state to lose
-	}
-	if _, err := os.Stat(statePath(p.StateDir)); err == nil {
-		return nil // already migrated; the leftover legacy dir is inert
-	}
-	// The legacy dir can't be attributed to a specific instance, so hedge:
-	// migrating is right only if that state belongs to *this* flow.
-	return fmt.Errorf(`instance %q: found legacy state in %s, but this flow's state dir is now %s.
-If that state belongs to this flow, migrate it:
-    mkdir -p %s && mv %s %s
-Otherwise pin this profile to the old dir:
-    set "state_dir: .gralph-state" in the profile
-Or discard the old state:
-    rm -rf %s`,
-		p.Name, legacy, p.StateDir,
-		filepath.Dir(p.StateDir), legacy, p.StateDir,
-		legacy)
 }
 
 // parseTimeout parses an optional Go duration string from the profile.

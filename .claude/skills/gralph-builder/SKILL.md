@@ -7,7 +7,7 @@ description: >-
   validation/routing scripts, a gralph command graph, or a ralph-loop agent
   workflow; mentions of `gralph next`, `gralph run`, gralph.fail/route/store,
   gralph subcommands / fork-join quotas / parallel sub-agent workers, or
-  ".gralph" / ".gralph-state" state dirs. The skill's central job is to turn loosely specified
+  ".gralph" state dirs. The skill's central job is to turn loosely specified
   agent work into a graph of deterministically-verified steps, so the loop only
   advances on machine-checkable evidence rather than the agent's self-report.
   Do NOT use for unrelated Go/Lua coding or for non-gralph agent frameworks.

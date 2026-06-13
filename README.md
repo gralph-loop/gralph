@@ -397,9 +397,8 @@ go build -o example/gralph . && cd example
 
 ### 상태 디렉터리 파일
 
-`<state_dir>`은 기본 `.gralph/<인스턴스 이름>/`이다. 구버전 기본값(`.gralph-state/`)에
-상태가 남아 있으면 로더가 마이그레이션 안내와 함께 실행을 거부한다(엔트리부터의
-조용한 재시작 방지). `state_dir`을 명시하면 그 경로가 그대로 쓰인다.
+`<state_dir>`은 기본 `.gralph/<인스턴스 이름>/`이다. `state_dir`을 명시하면 그 경로가
+그대로 쓰인다.
 
 - `<state_dir>/state.json` — **프레임워크 내부**(사용자 비접근 영역): 커서, 세션 id, 커맨드별 실패 수.
 - `<state_dir>/store.json` — **유저 store**(Lua 전용 KV): 프레임워크는 내용을 건드리지 않는다.
