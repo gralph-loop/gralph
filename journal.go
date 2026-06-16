@@ -27,6 +27,7 @@ const (
 	EvCommandSucceeded = "command_succeeded" // cursor advanced
 	EvCommandFailed    = "command_failed"    // gate failed or script error
 	EvSubitemRecorded  = "subitem_recorded"  // one fork/join work item committed
+	EvRateLimited      = "rate_limited"      // launcher reported a quota wait
 	EvLoopDone         = "loop_done"         // cursor reached DONE
 )
 
@@ -46,6 +47,7 @@ type JournalEvent struct {
 	Reason     string `json:"reason,omitempty"`     // command_failed: fail reason or script error
 	Subcommand string `json:"subcommand,omitempty"` // subitem_recorded
 	Key        string `json:"key,omitempty"`        // subitem_recorded: work-item key
+	RetryAfter string `json:"retry_after,omitempty"` // rate_limited: RFC3339 wake time
 }
 
 func journalPath(dir string) string { return filepath.Join(dir, "journal.jsonl") }

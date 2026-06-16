@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# GALP V1 launcher (ratelimit).
+#
+# Runs the agent like the subprocess launcher, but scans its output for a
+# usage/quota-limit signal. On a hit it reports rate_limited{retry_after}, so
+# the gralph loop WAITS out the window instead of burning its retry budget.
+# Tune PATTERN and COOLDOWN_SECONDS (or parse a real reset time) for your agent.
+set -u
+
+PATTERN='rate.?limit|quota|usage limit|429|too many requests'
+COOLDOWN_SECONDS=3600   # fallback wait when the agent gives no reset time
+
+agent=(); seen=0
+for a in "$@"; do
+  if [ "$seen" = 1 ]; then agent+=("$a"); continue; fi
+  [ "$a" = "--" ] && seen=1
+done
+[ "${#agent[@]}" -eq 0 ] && { echo "launcher: no agent command after --" >&2; exit 1; }
+
+prompt=""
+[ -n "${GALP_PROMPT_FILE:-}" ] && [ -f "$GALP_PROMPT_FILE" ] && prompt="$(cat "$GALP_PROMPT_FILE")"
+cmd=()
+for a in "${agent[@]}"; do cmd+=("${a//\{\{prompt\}\}/$prompt}"); done
+
+write_result() { # outcome, message, retry_after(optional)
+  msg="$(printf '%s' "${2:-}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  if [ -n "${3:-}" ]; then
+    printf '{"protocol":1,"outcome":"%s","retry_after":"%s","message":"%s"}\n' "$1" "$3" "$msg" > "$GALP_RESULT_FILE"
+  else
+    printf '{"protocol":1,"outcome":"%s","message":"%s"}\n' "$1" "$msg" > "$GALP_RESULT_FILE"
+  fi
+}
+
+log="$(mktemp)"; trap 'rm -f "$log"' EXIT
+"${cmd[@]}" 2>&1 | tee "$log"           # show output live and capture it
+code=${PIPESTATUS[0]}
+
+if grep -qiE "$PATTERN" "$log"; then
+  retry="$(date -u -d "+${COOLDOWN_SECONDS} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v+"${COOLDOWN_SECONDS}"S +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  write_result rate_limited "usage limit detected" "$retry"
+  exit 0
+fi
+
+if [ "$code" -eq 0 ]; then write_result completed ""
+elif [ "$code" -eq 127 ]; then write_result unstartable "agent command not found"
+else write_result crashed "agent exited with code $code"
+fi
+exit 0

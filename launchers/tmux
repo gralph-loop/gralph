@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# GALP V1 launcher (tmux).
+#
+# Drives an INTERACTIVE agent inside a detached tmux session: start the agent,
+# inject the ralph prompt with send-keys (instead of {{prompt}} substitution),
+# wait for the session to end, then report. This is a STARTING POINT -- tune
+# the startup delay, prompt injection and completion heuristics for your agent.
+set -u
+
+agent=(); seen=0
+for a in "$@"; do
+  if [ "$seen" = 1 ]; then agent+=("$a"); continue; fi
+  [ "$a" = "--" ] && seen=1
+done
+[ "${#agent[@]}" -eq 0 ] && { echo "launcher: no agent command after --" >&2; exit 1; }
+
+prompt=""
+[ -n "${GALP_PROMPT_FILE:-}" ] && [ -f "$GALP_PROMPT_FILE" ] && prompt="$(cat "$GALP_PROMPT_FILE")"
+
+write_result() {
+  msg="$(printf '%s' "${2:-}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  printf '{"protocol":1,"outcome":"%s","message":"%s"}\n' "$1" "$msg" > "$GALP_RESULT_FILE"
+}
+
+command -v tmux >/dev/null 2>&1 || { echo "launcher: tmux not installed" >&2; exit 1; }
+
+session="galp-${GALP_SESSION_ID:-$$}"
+# tmux-driven agents get the prompt via send-keys, so drop the placeholder.
+cmd=()
+for a in "${agent[@]}"; do [ "$a" = "{{prompt}}" ] && continue; cmd+=("$a"); done
+
+if ! tmux new-session -d -s "$session" "${cmd[@]}"; then
+  write_result crashed "tmux launch failed"; exit 0
+fi
+
+sleep 2                                   # let the agent's UI come up
+tmux send-keys -t "$session" -- "$prompt"
+tmux send-keys -t "$session" Enter
+
+deadline=0
+if [ -n "${GALP_TIMEOUT_MS:-}" ] && [ "${GALP_TIMEOUT_MS}" -gt 0 ] 2>/dev/null; then
+  deadline=$(( $(date +%s) + GALP_TIMEOUT_MS / 1000 ))
+fi
+while tmux has-session -t "$session" 2>/dev/null; do
+  if [ "$deadline" -ne 0 ] && [ "$(date +%s)" -ge "$deadline" ]; then
+    tmux kill-session -t "$session" 2>/dev/null
+    write_result timed_out "tmux session exceeded timeout"; exit 0
+  fi
+  sleep 2
+done
+
+write_result completed "tmux session ended"
+exit 0
