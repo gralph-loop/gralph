@@ -27,6 +27,7 @@ const (
 	EvCommandSucceeded = "command_succeeded" // cursor advanced
 	EvCommandFailed    = "command_failed"    // gate failed or script error
 	EvSubitemRecorded  = "subitem_recorded"  // one fork/join work item committed
+	EvRateLimited      = "rate_limited"      // launcher reported a quota wait
 	EvLoopDone         = "loop_done"         // cursor reached DONE
 )
 
@@ -37,15 +38,16 @@ type JournalEvent struct {
 	Event string `json:"event"`
 
 	Session    string `json:"session,omitempty"`
-	Cursor     string `json:"cursor,omitempty"`     // session_start
-	Iteration  int    `json:"iteration,omitempty"`  // session_start, loop_done
-	Command    string `json:"command,omitempty"`    // command_* (label for failures)
-	Next       string `json:"next,omitempty"`       // command_succeeded: routed / next cursor
-	GateMs     int64  `json:"gate_ms,omitempty"`    // command_succeeded: lua gate duration
-	Failure    int    `json:"failure,omitempty"`    // command_failed: failure number
-	Reason     string `json:"reason,omitempty"`     // command_failed: fail reason or script error
-	Subcommand string `json:"subcommand,omitempty"` // subitem_recorded
-	Key        string `json:"key,omitempty"`        // subitem_recorded: work-item key
+	Cursor     string `json:"cursor,omitempty"`      // session_start
+	Iteration  int    `json:"iteration,omitempty"`   // session_start, loop_done
+	Command    string `json:"command,omitempty"`     // command_* (label for failures)
+	Next       string `json:"next,omitempty"`        // command_succeeded: routed / next cursor
+	GateMs     int64  `json:"gate_ms,omitempty"`     // command_succeeded: lua gate duration
+	Failure    int    `json:"failure,omitempty"`     // command_failed: failure number
+	Reason     string `json:"reason,omitempty"`      // command_failed: fail reason or script error
+	Subcommand string `json:"subcommand,omitempty"`  // subitem_recorded
+	Key        string `json:"key,omitempty"`         // subitem_recorded: work-item key
+	RetryAfter string `json:"retry_after,omitempty"` // rate_limited: RFC3339 wake time
 }
 
 func journalPath(dir string) string { return filepath.Join(dir, "journal.jsonl") }

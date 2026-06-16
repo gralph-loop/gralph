@@ -4,13 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"os/exec"
-	"strings"
-	"syscall"
 	"time"
 )
 
@@ -99,20 +94,61 @@ func runLoop(ctx context.Context, p *Profile, maxIterations int) error {
 
 		// Per-node overrides: the cursor's command may carry its own agent
 		// command and/or ralph prompt; otherwise the profile-level ones apply.
+		// The agent is never spawned directly: a GALP launcher (the built-in
+		// default unless the profile overrides it) execs it and reports a
+		// structured result (see launcher.go).
 		node := p.Command(cursor)
-		agentErr := launchAgent(ctx, p, p.AgentCommandFor(node), p.PromptFor(node))
+		launcherArgv, err := resolveLauncher(p, node)
+		if err != nil {
+			return err
+		}
+		res, runErr := runLauncher(ctx, p, launcherArgv, p.AgentCommandFor(node), p.PromptFor(node), st.SessionID)
 		if ctx.Err() != nil {
 			return interrupted(i, cursor)
 		}
-		if agentErr != nil {
-			// Launching the binary itself is impossible: retrying cannot help.
-			if errors.Is(agentErr, exec.ErrNotFound) || errors.Is(agentErr, fs.ErrNotExist) {
-				return fmt.Errorf("agent command %q cannot be started: %w", p.AgentCommandFor(node)[0], agentErr)
+		if runErr != nil {
+			// Host-side failure: the launcher binary cannot be started, or it
+			// reported an incompatible protocol. Retrying cannot help.
+			return fmt.Errorf("launcher %q: %w", launcherArgv[0], runErr)
+		}
+
+		switch res.Outcome {
+		case OutcomeRateLimited:
+			// The agent hit a usage limit: wait out the window without
+			// spending the give-up budget or applying the agent timeout, then
+			// retry the same cursor in a fresh session.
+			wait := time.Until(res.RetryAfter)
+			if wait < 0 {
+				wait = 0
 			}
-			// Otherwise an agent process dying is not a graph failure; report
-			// and keep looping (the cursor did not move, so the work will be
-			// retried in a fresh session).
-			fmt.Fprintf(os.Stderr, "[gralph] agent exited with error: %v\n", agentErr)
+			fmt.Fprintf(os.Stderr, "[gralph] rate limited; waiting %s until %s before retry\n",
+				wait.Round(time.Second), res.RetryAfter.UTC().Format(time.RFC3339))
+			appendJournal(p.StateDir, JournalEvent{
+				Event:      EvRateLimited,
+				Session:    st.SessionID,
+				Cursor:     cursor,
+				Iteration:  i,
+				RetryAfter: res.RetryAfter.UTC().Format(time.RFC3339),
+				Reason:     res.Message,
+			})
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return interrupted(i, cursor)
+			}
+			continue
+		case OutcomeUnstartable:
+			// The agent binary itself cannot be started: retrying is pointless
+			// (preserves the pre-GALP fail-fast on a missing agent command).
+			return fmt.Errorf("agent command %q cannot be started: %s", p.AgentCommandFor(node)[0], res.Message)
+		}
+
+		agentFailed := res.Outcome != OutcomeCompleted
+		if agentFailed {
+			// An agent process dying is not a graph failure; report and keep
+			// looping (the cursor did not move, so the work is retried in a
+			// fresh session).
+			fmt.Fprintf(os.Stderr, "[gralph] agent session %s: %s\n", res.Outcome, res.Message)
 		}
 
 		after, err := resolveNext(p)
@@ -122,7 +158,7 @@ func runLoop(ctx context.Context, p *Profile, maxIterations int) error {
 		if after != cursor {
 			// Cursor progressed; the agent is alive enough.
 			consecutiveFailures = 0
-		} else if agentErr != nil {
+		} else if agentFailed {
 			consecutiveFailures++
 			if consecutiveFailures >= MaxConsecutiveAgentFailures {
 				return fmt.Errorf("agent exited abnormally %d times in a row without cursor progress (cursor: %s); giving up",
@@ -160,45 +196,6 @@ func agentBackoff(n int) time.Duration {
 		d = agentBackoffMax
 	}
 	return d
-}
-
-// launchAgent runs one agent session with the given argv (each element may
-// contain {{prompt}}) and ralph prompt. ctx cancellation (signal) and the
-// optional agent.timeout both terminate the process: SIGTERM first, then a
-// hard kill after agentKillGrace.
-func launchAgent(ctx context.Context, p *Profile, command []string, prompt string) error {
-	if t := p.Agent.timeout; t > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, t)
-		defer cancel()
-	}
-	argv := make([]string, len(command))
-	for i, a := range command {
-		argv[i] = strings.ReplaceAll(a, "{{prompt}}", prompt)
-	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = p.Dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(),
-		// Lets `gralph next` / custom commands find the profile and operate
-		// on the same instance's state dir as the orchestrator.
-		"GRALPH_PROFILE="+p.Path,
-		"GRALPH_INSTANCE_NAME="+p.Name,
-	)
-	cmd.Cancel = func() error {
-		// Graceful first; WaitDelay hard-kills if the process lingers.
-		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-			return cmd.Process.Kill()
-		}
-		return nil
-	}
-	cmd.WaitDelay = agentKillGrace
-	err := cmd.Run()
-	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("agent timed out after %s: %w", p.Agent.timeout, err)
-	}
-	return err
 }
 
 func newSessionID() string {

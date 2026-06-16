@@ -190,6 +190,12 @@ func main() {
 		}
 		runDo(os.Args[2], os.Args[3:])
 
+	case "__galp-subprocess":
+		// Hidden subcommand: the built-in default GALP launcher (subprocess).
+		// gralph re-invokes itself this way to spawn an agent session (see
+		// launcher.go / galp_subprocess.go). Not listed in usage.
+		os.Exit(runGALPSubprocess(os.Args[2:]))
+
 	default:
 		fatal(fmt.Errorf("unknown command %q (custom commands run as `gralph do %s`)",
 			os.Args[1], os.Args[1]))

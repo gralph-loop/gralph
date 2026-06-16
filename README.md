@@ -331,46 +331,68 @@ gralph run --max-iterations N profile.yaml   # 플래그가 앞에 와도 동일
 ### 에이전트 사용량 한도(rate limit) 대응
 
 `claude -p` 같은 구독형 에이전트는 사용량 한도(예: 5시간 롤링 윈도우)에 걸리면 한도
-메시지만 찍고 즉시 비정상 종료한다. 오케스트레이터는 이를 일반 비정상 종료와 구분하지
-않으므로, 위의 백오프(최대 30s)로 5회 재시도한 뒤 **1분 남짓 만에 `giving up`으로
-종료된다** — 한도 리셋을 기다려주지 않는다. 커서·상태는 보존되니 리셋 후 `gralph run`을
-다시 실행하면 그대로 이어지지만, 무인 운행이 필요하면 `agent.command`를 래퍼 스크립트로
-감싸 한도를 래퍼 안에서 흡수하는 패턴을 권장한다:
+메시지만 찍고 즉시 비정상 종료한다. 기본 launcher는 이를 일반 비정상 종료(`crashed`)와
+구분하지 않으므로, 백오프(최대 30s)로 5회 재시도한 뒤 **1분 남짓 만에 `giving up`으로
+종료된다** — 한도 리셋을 기다려주지 않는다.
+
+권장 방식은 **GALP `ratelimit` launcher**다. launcher가 한도를 감지하면 host에
+`rate_limited{retry_after}`를 보고하고, 루프는 그 시각까지 **연속 실패 예산을 소모하지
+않고**(타임아웃도 적용 않고) 대기한 뒤 같은 커서로 재시도한다:
+
+배포 아카이브(`gralph-launchers-<버전>.tar.gz`)나 리포의 `launchers/ratelimit` 예제를
+리포로 복사해 `PATTERN`/대기시각을 자기 에이전트에 맞게 편집한 뒤 참조한다:
 
 ```yaml
 agent:
-  command: ["./agent.sh", "{{prompt}}"]
+  command: ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"]
+  launcher: ["./launchers/ratelimit"]   # 상대경로 → 프로파일 디렉터리 기준 해석
 ```
 
-```sh
-#!/usr/bin/env bash
-# agent.sh — claude -p 래퍼: 사용량 한도를 감지하면 잠시 대기 후 exit 0 해서,
-# 루프의 연속 실패 예산(5회)을 소모하지 않고 다음 반복에서 재시도하게 한다.
-set -uo pipefail
+(이전처럼 `agent.command`를 래퍼 스크립트로 감싸 래퍼 안에서 `sleep` 후 `exit 0`하는
+패턴도 여전히 유효하다. 다만 대기를 launcher 결과로 host에 위임하면 `gralph status`로
+대기 상태가 보이고 `agent.timeout`과 충돌하지 않는다.)
 
-out=$(claude -p "$1" 2>&1)
-status=$?
-printf '%s\n' "$out"
+## 에이전트 Launcher (GALP V1)
 
-if [ "$status" -ne 0 ] && printf '%s' "$out" | grep -qiE 'usage limit|rate limit'; then
-  echo "[agent.sh] usage limit detected; sleeping 10m before retrying" >&2
-  sleep 600
-  exit 0   # 정상 종료로 보고: 루프가 실패 카운트 없이 새 세션을 기동한다
-fi
-exit "$status"
-```
+gralph는 에이전트를 **직접** 띄우지 않는다. 항상 **launcher**(별도 프로세스 플러그인)를
+exec하고 구조화된 결과를 읽는다. 코어가 launcher에 대해 아는 것은 "exec할 명령 한 줄"
+뿐이고, 에이전트 기동 방식의 변이는 전부 이 프로세스 경계 너머에 있다. 계약은
+[`docs/galp-v1.md`](docs/galp-v1.md)의 GALP V1로 고정된다.
 
-설계 포인트:
+- **기본 launcher = gralph 자기호출**(`gralph __galp-subprocess`)이며 **유일하게 바이너리에
+  내장된** launcher다. 비대화형(서브프로세스로 에이전트 실행)이라는 가장 흔한 경우는
+  외부 파일·플러그인·네트워크 없이 **단일 `gralph` 바이너리만으로** 동작한다. 이게
+  1급으로 지원되는 zero-config 경로이고, `launcher`를 지정하지 않은 기존 프로파일은
+  **동작이 100% 동일**하다.
+- **`launcher:`로 교체** 가능. 프로파일 레벨(`agent.launcher`) 또는 노드 레벨
+  (`commands[].agent.launcher`, 프로파일보다 우선)에서 argv로 지정한다. `launcher:`를
+  지정하면 host는 그 launcher를 exec하며 **`__galp-subprocess`은 전혀 거치지 않는다**. 첫 토큰
+  해석: 절대경로는 그대로, 구분자 포함 상대경로는 프로파일 디렉터리 기준, 구분자 없는
+  단순 이름은 `PATH`에서 조회(git 서브커맨드처럼).
+- **공식 예제 launcher**는 정규 배포에 `gralph-launchers-<버전>.tar.gz` 아카이브로
+  **동봉**된다(이 리포에선 `launchers/`). 바이너리에 임베드되지 않으며, 서드파티 launcher와
+  **완전히 동일하게** `launcher:` 참조로 통합되는 평범한 플러그인 파일이다(특별 대우 없음).
+  복사해서 자유롭게 편집한다(비대화형 서브프로세스 기동은 빌트인 `__galp-subprocess`가
+  이미 처리하므로 예제로 제공하지 않는다 — 최소 launcher가 궁금하면 `docs/galp-v1.md`
+  명세와 아래 `ratelimit`을 참고):
+  - `claude-tmux` — 대화형 Claude Code를 detached tmux 세션에서 구동(트러스트
+    다이얼로그 처리 → 채팅창 준비 대기 → `send-keys`로 프롬프트 주입 → 턴 완료
+    감지). 트러스트/준비/작업중 마커는 Claude Code TUI 기준이라 다른 TUI를 구동하려면
+    그 부분만 재조정한다.
+  - `ratelimit` — 사용량 한도 감지 후 `rate_limited{retry_after}` 보고 래퍼.
 
-- **대기는 반드시 래퍼 안에서.** exit 0이고 커서가 안 움직이면 루프는 백오프 없이
-  즉시 다음 반복을 돌므로, sleep 없이 exit 0만 하면 핫루프가 된다.
-- **짧게 자고 exit 0을 반복**하면 한도가 풀릴 때까지 "기동 → 거부 → 10분 대기" 사이클이
-  돈다. 거부된 호출은 작업을 소모하지 않으므로 무해하고, 한도 메시지의 리셋 시각을
-  파싱해 그때까지 자도록 고도화해도 된다.
-- **`agent.timeout`과의 상호작용**: 타임아웃을 설정했다면 래퍼의 대기 시간이 그 안에
-  들어가야 한다 — 초과하면 래퍼가 죽고 비정상 종료로 카운트된다.
-- **한도 외의 실패는 exit code를 그대로 통과**시켜, 진짜 장애에서는 루프의
-  백오프·연속 5회 중단 로직이 정상 동작하게 둔다.
+launcher가 보고하는 outcome과 host 동작:
+
+| outcome | host 동작 |
+|---|---|
+| `completed` | 세션 정상 종료. host가 `resolveNext`로 커서 진전을 독립 판정. |
+| `crashed` | 비정상 종료. 커서 미진전 시 백오프 + 연속 실패 카운트. |
+| `timed_out` | `crashed`와 동일 처리(로그상 구분). |
+| `rate_limited` | `retry_after`까지 대기(예산·타임아웃 미적용) 후 동일 커서 재시도. |
+| `unstartable` | 에이전트 바이너리 기동 불가 → 즉시 포기(재시도 무의미). |
+
+launcher 자체가 exit≠0이거나 결과 파일이 없으면 host는 `crashed`로 폴백하고, `protocol`
+버전이 안 맞으면 명확한 에러로 해당 실행을 실패 처리한다.
 
 ## 예제
 
@@ -425,7 +447,7 @@ go build -o example/gralph . && cd example
 
 | 파일 | 내용 |
 |---|---|
-| `main.go` | CLI 디스패치 (`run` / `graph` / `next` / `status` / `reset` / `validate` / `try` / `version` / `do <커스텀 커맨드>`) |
+| `main.go` | CLI 디스패치 (`run` / `graph` / `next` / `status` / `reset` / `validate` / `try` / `version` / `do <커스텀 커맨드>` / 숨김 `__galp-subprocess`) |
 | `config.go` | 프로파일 YAML 파싱·검증 (서브커맨드 규칙·예약어 포함) |
 | `state.go` | 내부 상태(state.json)와 유저 store(store.json, key 단위 머지 커밋) |
 | `progress.go` | 서브커맨드 진행 상태(progress.json): 쿼터 판정, stale 무효화 |
@@ -438,5 +460,8 @@ go build -o example/gralph . && cd example
 | `journal.go` | append-only 이벤트 저널(journal.jsonl, best-effort) |
 | `graph.go` | `gralph graph`: 커맨드 그래프 mermaid 렌더링 |
 | `loop.go` | 오케스트레이터 (랄프 반복문): 매 반복 진입 시 `resolveNext()`를 함수로 직접 호출해 커서를 확인 |
+| `launcher.go` | GALP V1 계약(host측): 요청/결과 JSON, `runLauncher`(launcher exec + 결과 파싱), launcher argv 해석 |
+| `galp_subprocess.go` | 빌트인 디폴트 subprocess launcher (`gralph __galp-subprocess`): 에이전트 서브프로세스 기동·타임아웃·시그널 전달 |
+| `launchers/` | 배포에 동봉되는 예제 launcher(claude-tmux/ratelimit). 바이너리에 임베드되지 않으며 서드파티와 동일하게 `launcher:` 참조로 통합 |
 | `ops.go` | 운영 커맨드: `status` / `reset` / `validate`(lint) |
 | `try.go` | `try` — 커밋 없는 게이트 드라이런 |

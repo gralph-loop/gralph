@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# GALP V1 launcher (tmux, tuned for Claude Code).
+#
+# Drives an INTERACTIVE Claude Code session inside a detached tmux session:
+# start `claude`, dismiss the first-run workspace-trust dialog, wait until the
+# chat box is actually ready, inject the ralph prompt with send-keys, then wait
+# for Claude to finish its turn (working -> idle) before reporting.
+#
+# Why this is Claude-specific (not a generic "tmux" launcher): a blind
+# `sleep N; send-keys` does NOT work against Claude. On a fresh directory Claude
+# first shows a "trust this folder?" dialog that swallows the prompt, and an
+# interactive session never exits on its own. The TRUST/READY/WORKING markers
+# below are Claude-Code TUI strings -- retune them to drive a different agent.
+set -u
+
+agent=(); seen=0
+for a in "$@"; do
+  if [ "$seen" = 1 ]; then agent+=("$a"); continue; fi
+  [ "$a" = "--" ] && seen=1
+done
+[ "${#agent[@]}" -eq 0 ] && { echo "launcher: no agent command after --" >&2; exit 1; }
+
+prompt=""
+[ -n "${GALP_PROMPT_FILE:-}" ] && [ -f "$GALP_PROMPT_FILE" ] && prompt="$(cat "$GALP_PROMPT_FILE")"
+
+write_result() {
+  msg="$(printf '%s' "${2:-}" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  printf '{"protocol":1,"outcome":"%s","message":"%s"}\n' "$1" "$msg" > "$GALP_RESULT_FILE"
+}
+
+command -v tmux >/dev/null 2>&1 || { echo "launcher: tmux not installed" >&2; exit 1; }
+
+# --- Claude Code TUI markers (retune for a different agent) ---
+TRUST_PATTERN='trust this folder'                 # first-run workspace trust dialog
+READY_PATTERN='bypass permissions|Try "|esc to '  # chat box is up and accepting input
+WORKING_PATTERN='esc to interrupt'                # Claude is mid-turn
+STARTUP_TIMEOUT=30                                # max seconds to reach a ready chat box
+IDLE_POLLS=3                                      # consecutive idle polls that end a turn
+
+session="galp-${GALP_SESSION_ID:-$$}"
+# tmux-driven agents get the prompt via send-keys, so drop the placeholder.
+cmd=()
+for a in "${agent[@]}"; do [ "$a" = "{{prompt}}" ] && continue; cmd+=("$a"); done
+
+if ! tmux new-session -d -s "$session" "${cmd[@]}"; then
+  write_result crashed "tmux launch failed"; exit 0
+fi
+
+pane() { tmux capture-pane -p -t "$session" 2>/dev/null; }
+gone() { ! tmux has-session -t "$session" 2>/dev/null; }
+
+# 1) Reach a ready chat box, dismissing the trust dialog if it appears. A
+#    session that dies here means the agent command itself was bad.
+ready=0
+for _ in $(seq 1 "$STARTUP_TIMEOUT"); do
+  if gone; then write_result crashed "claude exited before it was ready (bad command?)"; exit 0; fi
+  scr="$(pane)"
+  if printf '%s' "$scr" | grep -qiE "$TRUST_PATTERN"; then
+    tmux send-keys -t "$session" Enter            # "Yes, I trust this folder"
+  elif printf '%s' "$scr" | grep -qiE "$READY_PATTERN"; then
+    ready=1; break
+  fi
+  sleep 1
+done
+if [ "$ready" = 0 ]; then
+  tmux kill-session -t "$session" 2>/dev/null
+  write_result crashed "claude chat box never became ready within ${STARTUP_TIMEOUT}s"; exit 0
+fi
+
+# 2) Inject the prompt. -l sends it literally so embedded newlines insert into
+#    the input box instead of submitting line by line; a single trailing Enter
+#    then submits the whole multi-line prompt.
+tmux send-keys -t "$session" -l -- "$prompt"
+tmux send-keys -t "$session" Enter
+
+# 3) Wait for the turn to finish. We watch the working spinner appear and then
+#    stay gone for a few polls, which marks the turn complete; an interactive
+#    Claude never exits on its own, so we drive /exit ourselves. The advisory
+#    timeout still bounds the whole wait.
+deadline=0
+if [ -n "${GALP_TIMEOUT_MS:-}" ] && [ "${GALP_TIMEOUT_MS}" -gt 0 ] 2>/dev/null; then
+  deadline=$(( $(date +%s) + GALP_TIMEOUT_MS / 1000 ))
+fi
+saw_working=0
+idle_streak=0
+while :; do
+  if gone; then write_result completed "claude session ended"; exit 0; fi
+  if [ "$deadline" -ne 0 ] && [ "$(date +%s)" -ge "$deadline" ]; then
+    tmux kill-session -t "$session" 2>/dev/null
+    write_result timed_out "claude session exceeded timeout"; exit 0
+  fi
+  scr="$(pane)"
+  if printf '%s' "$scr" | grep -qiE "$WORKING_PATTERN"; then
+    saw_working=1; idle_streak=0
+  else
+    idle_streak=$((idle_streak + 1))
+  fi
+  if [ "$saw_working" = 1 ] && [ "$idle_streak" -ge "$IDLE_POLLS" ]; then
+    tmux send-keys -t "$session" Escape 2>/dev/null
+    tmux send-keys -t "$session" -l "/exit" 2>/dev/null
+    tmux send-keys -t "$session" Enter 2>/dev/null
+    sleep 2
+    tmux kill-session -t "$session" 2>/dev/null
+    write_result completed "claude turn finished"; exit 0
+  fi
+  sleep 2
+done

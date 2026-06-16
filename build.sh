@@ -30,5 +30,17 @@ suffix=""
 [ "$host_os" = "windows" ] && suffix=".exe"
 cp "dist/gralph-$host_os-$host_arch$suffix" "dist/gralph$suffix"
 cp "dist/gralph-windows-$host_arch.exe" dist/gralph.exe
+
+# Ship the example GALP launchers alongside the binaries. They are NOT embedded
+# in the binary -- they are ordinary plugin files integrated by reference (a
+# profile points `launcher:` at one), exactly like a third-party launcher. The
+# zero-config non-interactive path needs none of them: it uses the built-in
+# default launcher (`gralph __galp-subprocess`) baked into the single binary.
+echo "[build] bundling example launchers into dist/launchers/"
+mkdir -p dist/launchers
+cp launchers/* dist/launchers/
+chmod +x dist/launchers/*
+
 echo "[build] done:"
 ls -1 dist/gralph*
+ls -1 dist/launchers/

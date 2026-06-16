@@ -95,6 +95,13 @@ type AgentSpec struct {
 	// Empty means no timeout.
 	Timeout string `yaml:"timeout"`
 
+	// Launcher is the GALP launcher argv used to spawn the agent session
+	// (see launcher.go). Empty means the built-in default launcher, gralph
+	// re-invoking itself (`gralph __galp-subprocess`), which behaves exactly like a
+	// direct subprocess. A relative path containing a separator resolves
+	// against the profile dir.
+	Launcher []string `yaml:"launcher"`
+
 	// timeout is Timeout parsed at load time (not from YAML).
 	timeout time.Duration
 }
@@ -419,6 +426,16 @@ func (p *Profile) AgentCommandFor(c *CommandSpec) []string {
 		return c.Agent.Command
 	}
 	return p.Agent.Command
+}
+
+// LauncherFor resolves the effective GALP launcher argv for a node: the
+// node's override when present, otherwise the profile-level launcher. An empty
+// result means the built-in default launcher.
+func (p *Profile) LauncherFor(c *CommandSpec) []string {
+	if c != nil && c.Agent != nil && len(c.Agent.Launcher) > 0 {
+		return c.Agent.Launcher
+	}
+	return p.Agent.Launcher
 }
 
 // PromptFor resolves the effective ralph prompt for a node: the node's
