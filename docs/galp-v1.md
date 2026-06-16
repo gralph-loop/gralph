@@ -191,10 +191,12 @@ gralph ships a few **example** launchers in the release as a
 `gralph-launchers-<version>.tar.gz` archive (and in this repo under
 `launchers/`). They are ordinary plugin files — not embedded in the binary —
 integrated by the exact same `launcher:` reference as any third-party launcher.
-Copy one into your repo (or point at it on disk) and edit freely:
+Copy one into your repo (or point at it on disk) and edit freely. (There is no
+`subprocess` example: the built-in `__galp-subprocess` already covers the
+non-interactive case, so duplicating it as a shell script would only risk
+drifting from the Go implementation. For a minimal launcher to start from, read
+the contract above and the `ratelimit` example.)
 
-- `subprocess` — an editable shell-script copy of the built-in default
-  (non-interactive subprocess + `{{prompt}}` substitution + exit-code mapping).
 - `claude-tmux` — drives an interactive Claude Code session in a detached tmux
   session (dismiss the trust dialog, wait for the chat box, inject the prompt
   with `send-keys`, detect turn completion). The trust/ready/working markers are

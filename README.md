@@ -372,8 +372,9 @@ exec하고 구조화된 결과를 읽는다. 코어가 launcher에 대해 아는
 - **공식 예제 launcher**는 정규 배포에 `gralph-launchers-<버전>.tar.gz` 아카이브로
   **동봉**된다(이 리포에선 `launchers/`). 바이너리에 임베드되지 않으며, 서드파티 launcher와
   **완전히 동일하게** `launcher:` 참조로 통합되는 평범한 플러그인 파일이다(특별 대우 없음).
-  복사해서 자유롭게 편집한다:
-  - `subprocess` — 빌트인 디폴트(`__galp-subprocess`)와 동등한 동작의 편집 가능 셸 레퍼런스.
+  복사해서 자유롭게 편집한다(비대화형 서브프로세스 기동은 빌트인 `__galp-subprocess`가
+  이미 처리하므로 예제로 제공하지 않는다 — 최소 launcher가 궁금하면 `docs/galp-v1.md`
+  명세와 아래 `ratelimit`을 참고):
   - `claude-tmux` — 대화형 Claude Code를 detached tmux 세션에서 구동(트러스트
     다이얼로그 처리 → 채팅창 준비 대기 → `send-keys`로 프롬프트 주입 → 턴 완료
     감지). 트러스트/준비/작업중 마커는 Claude Code TUI 기준이라 다른 TUI를 구동하려면
@@ -461,6 +462,6 @@ go build -o example/gralph . && cd example
 | `loop.go` | 오케스트레이터 (랄프 반복문): 매 반복 진입 시 `resolveNext()`를 함수로 직접 호출해 커서를 확인 |
 | `launcher.go` | GALP V1 계약(host측): 요청/결과 JSON, `runLauncher`(launcher exec + 결과 파싱), launcher argv 해석 |
 | `galp_subprocess.go` | 빌트인 디폴트 subprocess launcher (`gralph __galp-subprocess`): 에이전트 서브프로세스 기동·타임아웃·시그널 전달 |
-| `launchers/` | 배포에 동봉되는 예제 launcher(subprocess/claude-tmux/ratelimit). 바이너리에 임베드되지 않으며 서드파티와 동일하게 `launcher:` 참조로 통합 |
+| `launchers/` | 배포에 동봉되는 예제 launcher(claude-tmux/ratelimit). 바이너리에 임베드되지 않으며 서드파티와 동일하게 `launcher:` 참조로 통합 |
 | `ops.go` | 운영 커맨드: `status` / `reset` / `validate`(lint) |
 | `try.go` | `try` — 커밋 없는 게이트 드라이런 |
