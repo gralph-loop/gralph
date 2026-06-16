@@ -21,8 +21,8 @@ import (
 // (a plugin: a separate process) and reads back a structured result. The only
 // thing the host knows about a launcher is "one command line to exec"; all
 // agent-spawning variability lives behind this process boundary. The built-in
-// default launcher is gralph re-invoking itself (`gralph __galp-exec`), so the
-// zero-config path needs no external files (see galp_exec.go).
+// default launcher is gralph re-invoking itself (`gralph __galp-subprocess`), so
+// the zero-config path needs no external files (see galp_subprocess.go).
 //
 // Host <-> launcher communication is files + env + exit code:
 //   - host writes a request JSON (GALP_REQUEST_FILE) and a prompt file,
@@ -139,8 +139,8 @@ func parseGALPResult(data []byte) (SessionResult, error) {
 var selfExe = os.Executable
 
 // resolveLauncher picks the launcher argv for a node: an explicit profile/node
-// launcher when set, otherwise the built-in default (gralph __galp-exec). A
-// relative launcher path that contains a separator resolves against the
+// launcher when set, otherwise the built-in default (gralph __galp-subprocess).
+// A relative launcher path that contains a separator resolves against the
 // profile dir; a bare name is left for PATH lookup.
 func resolveLauncher(p *Profile, node *CommandSpec) ([]string, error) {
 	if argv := p.LauncherFor(node); len(argv) > 0 {
@@ -154,7 +154,7 @@ func resolveLauncher(p *Profile, node *CommandSpec) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot locate gralph executable for the default launcher: %w", err)
 	}
-	return []string{exe, "__galp-exec"}, nil
+	return []string{exe, "__galp-subprocess"}, nil
 }
 
 // runLauncher execs one launcher for one agent session and returns the parsed

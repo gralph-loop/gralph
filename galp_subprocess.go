@@ -15,33 +15,36 @@ import (
 	"time"
 )
 
-// runGALPExec is gralph's built-in, default GALP launcher, invoked as
+// runGALPSubprocess is gralph's built-in, default GALP launcher, invoked as
 //
-//	gralph __galp-exec -- <agent argv...>
+//	gralph __galp-subprocess -- <agent argv...>
 //
-// It is the reference launcher implementation and reproduces the pre-GALP
-// launch behavior: spawn the agent as a subprocess, inherit stdio, enforce the
-// timeout, SIGTERM then hard-kill on cancellation. It reports only completed /
-// crashed / timed_out / unstartable -- never rate_limited (quota detection is
-// non-trivial and is the job of an opt-in launcher, by design).
+// It is the subprocess launcher: it reproduces the pre-GALP launch behavior --
+// spawn the agent as a subprocess, inherit stdio, substitute {{prompt}}, enforce
+// the timeout, SIGTERM then hard-kill on cancellation. It reports only completed
+// / crashed / timed_out / unstartable -- never rate_limited (quota detection is
+// non-trivial and is the job of an opt-in launcher, by design). The editable
+// `subprocess` example launcher is a shell copy of exactly this behavior; this
+// is the only launcher baked into the binary, so the non-interactive path needs
+// no external files.
 //
 // The return value is this launcher's own exit code: 0 when a valid result was
 // written, non-zero only when the launcher itself failed (transport broken).
-func runGALPExec(args []string) int {
+func runGALPSubprocess(args []string) int {
 	resultFile := os.Getenv("GALP_RESULT_FILE")
 	if resultFile == "" {
-		fmt.Fprintln(os.Stderr, "gralph __galp-exec: GALP_RESULT_FILE is not set")
+		fmt.Fprintln(os.Stderr, "gralph __galp-subprocess: GALP_RESULT_FILE is not set")
 		return 1
 	}
 	write := func(res galpResult) int {
 		res.Protocol = GALPVersion
 		data, err := json.Marshal(res)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gralph __galp-exec: marshal result: %v\n", err)
+			fmt.Fprintf(os.Stderr, "gralph __galp-subprocess: marshal result: %v\n", err)
 			return 1
 		}
 		if err := os.WriteFile(resultFile, data, 0o600); err != nil {
-			fmt.Fprintf(os.Stderr, "gralph __galp-exec: write result: %v\n", err)
+			fmt.Fprintf(os.Stderr, "gralph __galp-subprocess: write result: %v\n", err)
 			return 1
 		}
 		return 0
@@ -56,7 +59,7 @@ func runGALPExec(args []string) int {
 		}
 	}
 	if len(agentArgv) == 0 {
-		fmt.Fprintln(os.Stderr, "gralph __galp-exec: no agent command after --")
+		fmt.Fprintln(os.Stderr, "gralph __galp-subprocess: no agent command after --")
 		return 1
 	}
 
@@ -64,7 +67,7 @@ func runGALPExec(args []string) int {
 	if pf := os.Getenv("GALP_PROMPT_FILE"); pf != "" {
 		b, err := os.ReadFile(pf)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gralph __galp-exec: read prompt file: %v\n", err)
+			fmt.Fprintf(os.Stderr, "gralph __galp-subprocess: read prompt file: %v\n", err)
 			return 1
 		}
 		prompt = string(b)

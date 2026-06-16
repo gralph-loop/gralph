@@ -12,13 +12,13 @@ import (
 
 // TestMain lets the test binary double as gralph's built-in default launcher.
 // runLoop's default launcher re-invokes the gralph executable as
-// `gralph __galp-exec ...`; under `go test` os.Executable() is this test
-// binary, so it must dispatch __galp-exec exactly like main() does. Without
-// this, every loop test that uses the default launcher would just re-run the
-// suite.
+// `gralph __galp-subprocess ...`; under `go test` os.Executable() is this test
+// binary, so it must dispatch __galp-subprocess exactly like main() does.
+// Without this, every loop test that uses the default launcher would just
+// re-run the suite.
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && os.Args[1] == "__galp-exec" {
-		os.Exit(runGALPExec(os.Args[2:]))
+	if len(os.Args) > 1 && os.Args[1] == "__galp-subprocess" {
+		os.Exit(runGALPSubprocess(os.Args[2:]))
 	}
 	os.Exit(m.Run())
 }

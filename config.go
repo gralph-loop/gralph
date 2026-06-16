@@ -97,7 +97,7 @@ type AgentSpec struct {
 
 	// Launcher is the GALP launcher argv used to spawn the agent session
 	// (see launcher.go). Empty means the built-in default launcher, gralph
-	// re-invoking itself (`gralph __galp-exec`), which behaves exactly like a
+	// re-invoking itself (`gralph __galp-subprocess`), which behaves exactly like a
 	// direct subprocess. A relative path containing a separator resolves
 	// against the profile dir.
 	Launcher []string `yaml:"launcher"`

@@ -23,7 +23,6 @@ Usage:
   gralph reset [--profile p] [--force] [--failures] reset the state dir (--failures: counters only)
   gralph validate <profile.yaml>                    lint a profile without running anything
   gralph try <command> [--profile p] [--arg v ...]  dry-run a gate: no cursor check, nothing committed
-  gralph launchers init [name] [--force]            scaffold an editable GALP launcher under .gralph/launchers
   gralph version                                    print version (from Go build info)
 
 One profile can drive several isolated flows: --name picks the instance
@@ -191,14 +190,11 @@ func main() {
 		}
 		runDo(os.Args[2], os.Args[3:])
 
-	case "launchers":
-		os.Exit(runLaunchers(os.Args[2:]))
-
-	case "__galp-exec":
-		// Hidden subcommand: the built-in default GALP launcher. gralph
-		// re-invokes itself this way to spawn an agent session (see
-		// launcher.go / galp_exec.go). Not listed in usage.
-		os.Exit(runGALPExec(os.Args[2:]))
+	case "__galp-subprocess":
+		// Hidden subcommand: the built-in default GALP launcher (subprocess).
+		// gralph re-invokes itself this way to spawn an agent session (see
+		// launcher.go / galp_subprocess.go). Not listed in usage.
+		os.Exit(runGALPSubprocess(os.Args[2:]))
 
 	default:
 		fatal(fmt.Errorf("unknown command %q (custom commands run as `gralph do %s`)",

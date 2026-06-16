@@ -137,43 +137,75 @@ control information goes through the result file.
 - Future fields are additive only. Changing the meaning of an existing field
   means V2.
 
-## The built-in default launcher
+## The built-in default launcher (first-class, zero-config)
 
 If a profile sets no `launcher`, gralph re-invokes **itself** as
-`gralph __galp-exec` (a hidden subcommand). This is the GALP reference launcher:
-it reads the prompt file, substitutes `{{prompt}}`, spawns the agent as a
-subprocess (inheriting stdio, forwarding `GRALPH_*`), enforces
+`gralph __galp-subprocess` (a hidden subcommand). This is the built-in
+**subprocess** launcher: it reads the prompt file, substitutes `{{prompt}}`,
+spawns the agent as a subprocess (inheriting stdio, forwarding `GRALPH_*`),
+enforces
 `GALP_TIMEOUT_MS`, forwards termination signals (SIGTERM → hard-kill), and
 reports `completed` / `crashed` / `timed_out` / `unstartable`. It never reports
 `rate_limited` — quota detection is the job of an opt-in launcher.
 
-This keeps the zero-config path dependency-free (no external files) while making
-the default follow the exact same path and contract as any other launcher.
+This is the **one launcher baked into the binary**, on purpose: the common
+non-interactive case (run an agent as a subprocess) works with **nothing but the
+single `gralph` binary** — no external files, no plugin to install, no network.
+Every other launcher, official example or third-party alike, lives outside the
+binary and is opt-in.
 
 ## Writing your own launcher
 
-Scaffold an editable starting point:
-
-```sh
-gralph launchers init            # all templates
-gralph launchers init tmux       # just one
-gralph launchers init --force    # overwrite existing copies
-```
-
-Templates land in `.gralph/launchers/<name>`:
-
-- `subprocess` — equivalent to the built-in default, as an editable shell script.
-- `tmux` — drives an interactive agent in a detached tmux session.
-- `ratelimit` — scans agent output for a usage-limit signal and reports
-  `rate_limited{retry_after}`.
-
-Point a profile at one:
+A launcher is just an **executable** (any language) that reads
+`GALP_REQUEST_FILE` / the `GALP_*` env, drives the agent, writes
+`GALP_RESULT_FILE`, and exits 0. There is no registration step and no plugin
+API: you integrate one purely **by reference** — point a profile's `launcher:`
+at it. This is identical for the official example launchers and for anything a
+third party ships; the official examples have no special status.
 
 ```yaml
 agent:
-  command: ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"]
-  launcher: [".gralph/launchers/tmux"]   # relative paths resolve against the profile dir
+  command: ["myagent", "--flag", "{{prompt}}"]
+  launcher: ["acme-launcher", "--verbose"]   # argv; the host appends `-- <agent argv...>`
 ```
 
-A launcher in any language is fine — it only has to read `GALP_REQUEST_FILE`,
-drive the agent, write `GALP_RESULT_FILE`, and exit 0.
+`launcher:` may be set at the profile level (`agent.launcher`) or per node
+(`commands[].agent.launcher`, which overrides the profile). The first token is
+resolved like this:
+
+| First token of `launcher:` | Resolved as |
+|---|---|
+| absolute path (`/opt/acme/launcher`) | used as-is |
+| relative path **with a separator** (`./launchers/claude-tmux`) | relative to the **profile directory** |
+| bare name **without a separator** (`acme-launcher`) | looked up on `PATH` (like a git subcommand) |
+
+So a third party can distribute a launcher however they like — install it on
+`PATH`, vendor it into the repo and reference it relatively, or pin an absolute
+path. gralph never has to know about it ahead of time; that is the whole point
+of the process boundary (supporting a new agent never needs a new gralph
+release).
+
+### Official example launchers
+
+gralph ships a few **example** launchers in the release under `dist/launchers/`
+(and in this repo under `launchers/`). They are ordinary plugin files — not
+embedded in the binary — integrated by the exact same `launcher:` reference as
+any third-party launcher. Copy one into your repo (or point at it on disk) and
+edit freely:
+
+- `subprocess` — an editable shell-script copy of the built-in default
+  (non-interactive subprocess + `{{prompt}}` substitution + exit-code mapping).
+- `claude-tmux` — drives an interactive Claude Code session in a detached tmux
+  session (dismiss the trust dialog, wait for the chat box, inject the prompt
+  with `send-keys`, detect turn completion). The trust/ready/working markers are
+  Claude-Code-specific; retune them to drive a different interactive TUI.
+- `ratelimit` — scans agent output for a usage-limit signal and reports
+  `rate_limited{retry_after}`.
+
+```yaml
+agent:
+  # claude-tmux drives the INTERACTIVE TUI: no -p, and the prompt arrives via
+  # send-keys (the {{prompt}} placeholder is dropped by the launcher).
+  command: ["claude", "--dangerously-skip-permissions"]
+  launcher: ["./launchers/claude-tmux"]   # relative path → resolved against the profile dir
+```
