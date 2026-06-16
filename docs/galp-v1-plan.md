@@ -160,7 +160,7 @@ exec: <launcher argv...> -- <agent command template argv...>
 
 | 변수 | 의미 |
 |---|---|
-| `GRALPH_LAUNCHER_PROTOCOL` | 프로토콜 버전 정수. V1 = `1`. |
+| `GRALPH_AGENT_LAUNCHER_PROTOCOL` | 프로토콜 버전 정수. V1 = `1`. |
 | `GRALPH_REQUEST_FILE` | **요청 JSON 파일 경로(정본).** 모든 입력의 권위 있는 출처. |
 | `GRALPH_RESULT_FILE` | launcher가 **결과 JSON을 기록해야 하는** 경로. |
 | `GRALPH_PROMPT_FILE` | ralph 프롬프트 텍스트 파일 경로(UTF-8). |
@@ -202,7 +202,7 @@ exec: <launcher argv...> -- <agent command template argv...>
 
 | 필드 | 필수 | 비고 |
 |---|---|---|
-| `protocol` | ✅ | host의 `GRALPH_LAUNCHER_PROTOCOL`과 일치해야 함. 불일치 시 host가 명확히 에러. |
+| `protocol` | ✅ | host의 `GRALPH_AGENT_LAUNCHER_PROTOCOL`과 일치해야 함. 불일치 시 host가 명확히 에러. |
 | `outcome` | ✅ | 아래 어휘 중 하나. |
 | `retry_after` | `rate_limited`일 때만 | RFC3339. host가 이 시각까지 대기. |
 | `message` | ❌ | 로그/진단용. |
@@ -229,7 +229,7 @@ exec: <launcher argv...> -- <agent command template argv...>
 
 ### 5.7 버저닝
 
-- `GRALPH_LAUNCHER_PROTOCOL` 정수로 버전 협상. launcher는 결과에 `protocol`을 echo.
+- `GRALPH_AGENT_LAUNCHER_PROTOCOL` 정수로 버전 협상. launcher는 결과에 `protocol`을 echo.
 - 불일치 → host가 명확한 에러(어떤 버전을 기대했고 무엇을 받았는지) 후 해당 세션 실패 처리.
 - 향후 필드는 **가산적(additive)** 으로만 추가. 기존 필드 의미 변경 금지(그러면 V2).
 
