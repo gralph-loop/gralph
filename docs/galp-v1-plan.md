@@ -108,12 +108,12 @@ gralph 코어는 launcher 종류를 **전혀 모른다.** 모든 지식은 GALP 
 
 - 신규 숨김 서브커맨드: `gralph __galp-exec` (`main.go:43` switch에 추가).
 - 이 서브커맨드는 GALP V1 **launcher 측 레퍼런스 구현**이다:
-  1. `GRALPH_REQUEST_FILE` JSON을 읽는다.
-  2. agent argv의 `{{prompt}}`를 `GRALPH_PROMPT_FILE` 내용으로 치환한다.
+  1. `GALP_REQUEST_FILE` JSON을 읽는다.
+  2. agent argv의 `{{prompt}}`를 `GALP_PROMPT_FILE` 내용으로 치환한다.
   3. `exec.CommandContext`로 에이전트를 띄운다 — **현재 `launchAgent`의 spawn 로직을
      그대로 이 서브커맨드로 이전**한다(`cmd.Dir`, stdout/stderr 상속, SIGTERM→WaitDelay
-     hard-kill, `GRALPH_TIMEOUT_MS` 기반 타임아웃).
-  4. 결과를 `GRALPH_RESULT_FILE`에 기록:
+     hard-kill, `GALP_TIMEOUT_MS` 기반 타임아웃).
+  4. 결과를 `GALP_RESULT_FILE`에 기록:
      - 에이전트 exit 0 → `{"protocol":1,"outcome":"completed"}`
      - exit ≠ 0 → `{"protocol":1,"outcome":"crashed","message":"..."}`
      - 타임아웃 만료 → `{"protocol":1,"outcome":"timed_out"}`
@@ -160,19 +160,25 @@ exec: <launcher argv...> -- <agent command template argv...>
 
 | 변수 | 의미 |
 |---|---|
-| `GRALPH_AGENT_LAUNCHER_PROTOCOL` | 프로토콜 버전 정수. V1 = `1`. |
-| `GRALPH_REQUEST_FILE` | **요청 JSON 파일 경로(정본).** 모든 입력의 권위 있는 출처. |
-| `GRALPH_RESULT_FILE` | launcher가 **결과 JSON을 기록해야 하는** 경로. |
-| `GRALPH_PROMPT_FILE` | ralph 프롬프트 텍스트 파일 경로(UTF-8). |
-| `GRALPH_TIMEOUT_MS` | 능동 작업 권고 한도(ms). `0` = 무제한. 할당량 *대기*에는 적용 안 됨. |
-| `GRALPH_SESSION_ID` | 현재 세션 ID. |
+| `GALP_VERSION` | 프로토콜 버전 정수. V1 = `1`. |
+| `GALP_REQUEST_FILE` | **요청 JSON 파일 경로(정본).** 모든 입력의 권위 있는 출처. |
+| `GALP_RESULT_FILE` | launcher가 **결과 JSON을 기록해야 하는** 경로. |
+| `GALP_PROMPT_FILE` | ralph 프롬프트 텍스트 파일 경로(UTF-8). |
+| `GALP_TIMEOUT_MS` | 능동 작업 권고 한도(ms). `0` = 무제한. 할당량 *대기*에는 적용 안 됨. |
+| `GALP_SESSION_ID` | 현재 세션 ID. |
 | `GRALPH_PROFILE` | 프로파일 절대 경로. (세션 내 `gralph next/do`가 사용 — 통과시킬 것.) |
 | `GRALPH_INSTANCE_NAME` | 인스턴스 이름. (세션 내 `gralph next/do`가 사용 — 통과시킬 것.) |
 
-> 편의상 위 스칼라들을 env로 미러링하지만, **정본은 `GRALPH_REQUEST_FILE`의 JSON**이다.
+> **두 범주를 구분할 것:**
+> - `GALP_*` = GALP 프로토콜 채널(host↔launcher 통신용). launcher가 *소비*한다.
+> - `GRALPH_*`(`GRALPH_PROFILE`, `GRALPH_INSTANCE_NAME`) = gralph 세션 통과 변수. launcher가
+>   *소비하지 않고* 에이전트 프로세스로 **그대로 통과**시켜야 세션 내 `gralph next/do`가
+>   같은 인스턴스 상태를 찾는다.
+>
+> 편의상 `GALP_*` 스칼라들을 env로 미러링하지만, **정본은 `GALP_REQUEST_FILE`의 JSON**이다.
 > 풍부/확장 필드는 요청 JSON에만 추가된다(스칼라 env는 V1 고정 집합).
 
-### 5.3 요청 JSON 스키마 (`GRALPH_REQUEST_FILE`)
+### 5.3 요청 JSON 스키마 (`GALP_REQUEST_FILE`)
 
 ```json
 {
@@ -185,11 +191,11 @@ exec: <launcher argv...> -- <agent command template argv...>
   "result_file": "/tmp/galp-XXXX/result.json",
   "agent_command": ["claude", "-p", "{{prompt}}", "--dangerously-skip-permissions"],
   "timeout_ms": 1800000,
-  "env_passthrough": { "GRALPH_PROFILE": "...", "GRALPH_INSTANCE_NAME": "...", "GRALPH_SESSION_ID": "..." }
+  "env_passthrough": { "GRALPH_PROFILE": "...", "GRALPH_INSTANCE_NAME": "..." }
 }
 ```
 
-### 5.4 결과 JSON 스키마 (`GRALPH_RESULT_FILE`, launcher → host)
+### 5.4 결과 JSON 스키마 (`GALP_RESULT_FILE`, launcher → host)
 
 ```json
 {
@@ -202,7 +208,7 @@ exec: <launcher argv...> -- <agent command template argv...>
 
 | 필드 | 필수 | 비고 |
 |---|---|---|
-| `protocol` | ✅ | host의 `GRALPH_AGENT_LAUNCHER_PROTOCOL`과 일치해야 함. 불일치 시 host가 명확히 에러. |
+| `protocol` | ✅ | host의 `GALP_VERSION`과 일치해야 함. 불일치 시 host가 명확히 에러. |
 | `outcome` | ✅ | 아래 어휘 중 하나. |
 | `retry_after` | `rate_limited`일 때만 | RFC3339. host가 이 시각까지 대기. |
 | `message` | ❌ | 로그/진단용. |
@@ -229,7 +235,7 @@ exec: <launcher argv...> -- <agent command template argv...>
 
 ### 5.7 버저닝
 
-- `GRALPH_AGENT_LAUNCHER_PROTOCOL` 정수로 버전 협상. launcher는 결과에 `protocol`을 echo.
+- `GALP_VERSION` 정수로 버전 협상. launcher는 결과에 `protocol`을 echo.
 - 불일치 → host가 명확한 에러(어떤 버전을 기대했고 무엇을 받았는지) 후 해당 세션 실패 처리.
 - 향후 필드는 **가산적(additive)** 으로만 추가. 기존 필드 의미 변경 금지(그러면 V2).
 
@@ -262,7 +268,7 @@ exec: <launcher argv...> -- <agent command template argv...>
 - `func runGALPExec(args []string) int`: `gralph __galp-exec` 본체.
 - 현재 `launchAgent`의 spawn 로직을 이리로 이전(서브프로세스 띄우기, 타임아웃,
   SIGTERM/kill). `{{prompt}}` 치환은 여기서 수행(프롬프트 파일에서 읽음).
-- 결과를 `GRALPH_RESULT_FILE`에 기록. completed/crashed/timed_out만 사용.
+- 결과를 `GALP_RESULT_FILE`에 기록. completed/crashed/timed_out만 사용.
 
 ### 6.4 `main.go`
 - `switch`(43)에 `case "__galp-exec": os.Exit(runGALPExec(os.Args[2:]))` 추가.
