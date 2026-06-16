@@ -39,6 +39,10 @@ jobs:
           for f in gralph-*; do
             cp "$f" "${f/gralph-/gralph-${GITHUB_REF_NAME}-}"
           done
+          # 예제 GALP launcher를 버전이 박힌 단일 아카이브로 동봉한다. 릴리즈 자산은
+          # 평면(디렉터리 없음)이라 확장자 없는 낱개 파일 대신 tarball로 올린다.
+          # 이름이 gralph-* 이므로 아래 files 글롭(dist/gralph-*)에 그대로 잡힌다.
+          tar -C launchers -czf "gralph-launchers-${GITHUB_REF_NAME}.tar.gz" .
           ls -1 gralph-*
 
       - name: Create release

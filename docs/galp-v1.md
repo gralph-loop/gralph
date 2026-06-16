@@ -187,11 +187,11 @@ release).
 
 ### Official example launchers
 
-gralph ships a few **example** launchers in the release under `dist/launchers/`
-(and in this repo under `launchers/`). They are ordinary plugin files — not
-embedded in the binary — integrated by the exact same `launcher:` reference as
-any third-party launcher. Copy one into your repo (or point at it on disk) and
-edit freely:
+gralph ships a few **example** launchers in the release as a
+`gralph-launchers-<version>.tar.gz` archive (and in this repo under
+`launchers/`). They are ordinary plugin files — not embedded in the binary —
+integrated by the exact same `launcher:` reference as any third-party launcher.
+Copy one into your repo (or point at it on disk) and edit freely:
 
 - `subprocess` — an editable shell-script copy of the built-in default
   (non-interactive subprocess + `{{prompt}}` substitution + exit-code mapping).

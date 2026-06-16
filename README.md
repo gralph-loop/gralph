@@ -339,8 +339,8 @@ gralph run --max-iterations N profile.yaml   # 플래그가 앞에 와도 동일
 `rate_limited{retry_after}`를 보고하고, 루프는 그 시각까지 **연속 실패 예산을 소모하지
 않고**(타임아웃도 적용 않고) 대기한 뒤 같은 커서로 재시도한다:
 
-배포에 동봉된 예제(`dist/launchers/ratelimit`, 리포에선 `launchers/ratelimit`)를 리포로
-복사해 `PATTERN`/대기시각을 자기 에이전트에 맞게 편집한 뒤 참조한다:
+배포 아카이브(`gralph-launchers-<버전>.tar.gz`)나 리포의 `launchers/ratelimit` 예제를
+리포로 복사해 `PATTERN`/대기시각을 자기 에이전트에 맞게 편집한 뒤 참조한다:
 
 ```yaml
 agent:
@@ -369,10 +369,10 @@ exec하고 구조화된 결과를 읽는다. 코어가 launcher에 대해 아는
   지정하면 host는 그 launcher를 exec하며 **`__galp-subprocess`은 전혀 거치지 않는다**. 첫 토큰
   해석: 절대경로는 그대로, 구분자 포함 상대경로는 프로파일 디렉터리 기준, 구분자 없는
   단순 이름은 `PATH`에서 조회(git 서브커맨드처럼).
-- **공식 예제 launcher**는 정규 배포의 `dist/launchers/`(이 리포에선 `launchers/`)에
-  **동봉**된다. 바이너리에 임베드되지 않으며, 서드파티 launcher와 **완전히 동일하게**
-  `launcher:` 참조로 통합되는 평범한 플러그인 파일이다(특별 대우 없음). 복사해서 자유롭게
-  편집한다:
+- **공식 예제 launcher**는 정규 배포에 `gralph-launchers-<버전>.tar.gz` 아카이브로
+  **동봉**된다(이 리포에선 `launchers/`). 바이너리에 임베드되지 않으며, 서드파티 launcher와
+  **완전히 동일하게** `launcher:` 참조로 통합되는 평범한 플러그인 파일이다(특별 대우 없음).
+  복사해서 자유롭게 편집한다:
   - `subprocess` — 빌트인 디폴트(`__galp-subprocess`)와 동등한 동작의 편집 가능 셸 레퍼런스.
   - `claude-tmux` — 대화형 Claude Code를 detached tmux 세션에서 구동(트러스트
     다이얼로그 처리 → 채팅창 준비 대기 → `send-keys`로 프롬프트 주입 → 턴 완료
