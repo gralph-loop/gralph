@@ -377,9 +377,12 @@ exec하고 구조화된 결과를 읽는다. 코어가 launcher에 대해 아는
   명세와 아래 `ratelimit`을 참고):
   - `claude-tmux` — 대화형 Claude Code를 detached tmux 세션에서 구동(트러스트
     다이얼로그 처리 → 채팅창 준비 대기 → `send-keys`로 프롬프트 주입 → 턴 완료
-    감지). 트러스트/준비/작업중 마커는 Claude Code TUI 기준이라 다른 TUI를 구동하려면
-    그 부분만 재조정한다.
-  - `ratelimit` — 사용량 한도 감지 후 `rate_limited{retry_after}` 보고 래퍼.
+    감지). 사용량 한도에 걸리면 Claude가 알려주는 리셋 시각(`...reached|<epoch>`
+    또는 "reset at 3pm")을 파싱해 `rate_limited{retry_after}`로 보고하므로 루프가
+    죽은 세션을 핫루프하지 않고 한도 윈도우를 대기한다. 트러스트/준비/작업중/한도
+    마커는 Claude Code TUI 기준이라 다른 TUI를 구동하려면 그 부분만 재조정한다.
+  - `ratelimit` — 비대화형(`-p`) 에이전트 출력에서 사용량 한도를 감지해
+    `rate_limited{retry_after}`를 보고하는 래퍼.
 
 launcher가 보고하는 outcome과 host 동작:
 
