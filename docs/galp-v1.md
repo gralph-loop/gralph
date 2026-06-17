@@ -199,10 +199,13 @@ the contract above and the `ratelimit` example.)
 
 - `claude-tmux` — drives an interactive Claude Code session in a detached tmux
   session (dismiss the trust dialog, wait for the chat box, inject the prompt
-  with `send-keys`, detect turn completion). The trust/ready/working markers are
+  with `send-keys`, detect turn completion). On a usage limit it parses Claude's
+  own reset time (`...reached|<epoch>` or "reset at 3pm") and reports
+  `rate_limited{retry_after}` so the loop waits out the window instead of
+  hot-looping dead sessions. The trust/ready/working/limit markers are
   Claude-Code-specific; retune them to drive a different interactive TUI.
-- `ratelimit` — scans agent output for a usage-limit signal and reports
-  `rate_limited{retry_after}`.
+- `ratelimit` — scans a non-interactive (`-p`) agent's output for a usage-limit
+  signal and reports `rate_limited{retry_after}`.
 
 ```yaml
 agent:
